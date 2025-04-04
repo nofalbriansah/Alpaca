@@ -29,6 +29,7 @@
 - Regenerate messages
 - YouTube recognition (Ask questions about a YouTube video using the transcript)
 - Website recognition (Ask questions about a certain website by parsing the url)
+- talk to cloud hosted models with openai compatible api keys
 
 ## Screenies
 
@@ -45,7 +46,7 @@ Normal conversation | Image recognition | Rich text formatting | Integrated scri
 
 Language               | Contributors
 :----------------------|:-----------
-🇷🇺 Russian              | [Alex K](https://github.com/alexkdeveloper)
+🇷🇺 Russian              | [Alex K](https://github.com/alexkdeveloper) [DasHi](https://github.com/col83)
 🇪🇸 Spanish              | [Jeffry Samuel](https://github.com/jeffser)
 🇫🇷 French               | [Louis Chauvet-Villaret](https://github.com/loulou64490) , [Théo FORTIN](https://github.com/topiga)
 🇧🇷 Brazilian Portuguese | [Daimar Stein](https://github.com/not-a-dev-stein) , [Bruno Antunes](https://github.com/antun3s)
