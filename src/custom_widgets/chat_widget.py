@@ -26,7 +26,6 @@ possible_prompts = [
     "Can you write a poem?",
     "Can you write a story?",
     "What is GNU-Linux?",
-    "Compare windows vs linux in spreadsheet",
     "Which is the best Linux distro?",
     "Give me butter chicken recipe",
     "Why is Pluto not a planet?",
@@ -41,7 +40,7 @@ possible_prompts = [
     "Explain how photosynthesis works",
     "Recommend a film about nature",
     "What is nostalgia?",
-    "Can you explain the concept of time dilation in physics?",
+    "Can you explain time dilation in physics?",
     "Can you explain the basics of machine learning?",
     "What is photoelectric effect?",
     "What is the history of the Great Wall of China?",
@@ -106,8 +105,13 @@ class chat(Gtk.Stack):
             halign=3
         )
         for prompt in random.sample(possible_prompts, 3):
+
             prompt_button = Gtk.Button(
-                label=prompt,
+                child=Gtk.Label(
+                    label=prompt,
+                    justify=2,
+                    wrap=True
+                ),
                 tooltip_text=_("Send prompt: '{}'").format(prompt)
             )
             prompt_button.connect('clicked', lambda *_, prompt=prompt : self.send_sample_prompt(prompt))
@@ -470,7 +474,7 @@ class chat_list(Gtk.ListBox):
     def chat_changed(self, future_row):
         if future_row:
             current_row = next((t for t in self.tab_list if t.chat_window == window.chat_stack.get_visible_child()), future_row)
-            if self.tab_list.index(future_row) != self.tab_list.index(current_row) or future_row.chat_window.get_visible_child_name() == 'loading':
+            if self.tab_list.index(future_row) != self.tab_list.index(current_row) or future_row.chat_window.get_visible_child_name() != 'content':
                 # Empty Search
                 if window.searchentry_messages.get_text() != '':
                     window.searchentry_messages.set_text('')

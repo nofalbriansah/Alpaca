@@ -123,6 +123,9 @@ class pulling_model(Gtk.Box):
     def get_search_string(self) -> str:
         return '{} {}'.format(self.get_name(), self.model_title)
 
+    def get_search_categories(self) -> set:
+        return set([c for c in available_models.get(self.get_name().split(':')[0], {}).get('categories', []) if c not in ('small', 'medium', 'big', 'huge')])
+
     def update_progressbar(self, data:dict):
         if not self.get_parent():
             logger.info("Pulling of '{}' was canceled".format(self.get_name()))
@@ -347,6 +350,9 @@ class local_model(Gtk.Box):
     def get_search_string(self) -> str:
         return '{} {} {}'.format(self.get_name(), self.model_title, self.data.get('system', None))
 
+    def get_search_categories(self) -> set:
+        return set([c for c in available_models.get(self.get_name().split(':')[0], {}).get('categories', []) if c not in ('small', 'medium', 'big', 'huge')])
+
     def get_vision(self) -> bool:
         categories = available_models.get(self.get_name().split(':')[0], {}).get('categories', [])
         if not categories:
@@ -471,7 +477,7 @@ class category_pill(Adw.Bin):
         'math': {'name': _('Math'), 'css': ['accent'], 'icon': 'accessories-calculator-symbolic'},
         'vision': {'name': _('Vision'), 'css': ['accent'], 'icon': 'eye-open-negative-filled-symbolic'},
         'embedding': {'name': _('Embedding'), 'css': ['error'], 'icon': 'brain-augemnted-symbolic'},
-        'tools': {'name': _('Actions'), 'css': ['accent'], 'icon': 'wrench-wide-symbolic'},
+        'tools': {'name': _('Tools'), 'css': ['accent'], 'icon': 'wrench-wide-symbolic'},
         'small': {'name': _('Small'), 'css': ['success'], 'icon': 'leaf-symbolic'},
         'medium': {'name': _('Medium'), 'css': ['brown'], 'icon': 'sprout-symbolic'},
         'big': {'name': _('Big'), 'css': ['warning'], 'icon': 'tree-circle-symbolic'},
@@ -588,7 +594,8 @@ class available_model(Gtk.Box):
             label=name.replace('-', ' ').title(),
             css_classes=['title-3'],
             hexpand=True,
-            ellipsize=3,
+            wrap=True,
+            wrap_mode=2,
             halign=1
         )
         self.append(title_label)
@@ -633,6 +640,9 @@ class available_model(Gtk.Box):
     def get_search_string(self) -> str:
         return '{} {} {} {}'.format(self.get_name(), self.get_name().replace('-', ' ').title(), available_models_descriptions.descriptions.get(self.get_name()), ' '.join(self.data.get('categories')))
 
+    def get_search_categories(self) -> set:
+        return set(self.data.get('categories', []))
+
 def add_local_model(model_name:str):
     model_element = local_model(model_name)
     window.local_model_flowbox.prepend(model_element)
@@ -640,7 +650,7 @@ def add_local_model(model_name:str):
 
 def update_local_model_list():
     window.local_model_flowbox.remove_all()
-    window.model_dropdown.get_model().remove_all()
+    GLib.idle_add(window.model_dropdown.get_model().remove_all)
     default_model = window.sql_instance.get_preference('default_model')
     threads=[]
     local_models = window.get_current_instance().get_local_models()
@@ -656,8 +666,39 @@ def update_local_model_list():
 
 def update_available_model_list():
     global available_models
-    available_models = window.get_current_instance().get_available_models()
     window.available_model_flowbox.remove_all()
+    available_models = window.get_current_instance().get_available_models()
+
+    # Category Filter
+    window.model_filter_button.set_visible(len(available_models) > 0)
+    container = Gtk.Box(
+        orientation=1,
+        spacing=5
+    )
+    if len(available_models) > 0:
+        for name, category in category_pill.metadata.items():
+            if category.get('name') and (name != 'embedding' or os.getenv('ALPACA_SHOW_EMBEDDING_MODELS', '0') == '1'):
+                pill_container = Gtk.Box(
+                    spacing=5,
+                    halign=3
+                )
+                icon = Gtk.Image.new_from_icon_name(category.get('icon', 'language-symbolic'))
+                icon.set_css_classes(category.get('css', []))
+                pill_container.append(icon)
+                pill_container.append(Gtk.Label(label=category.get('name')))
+                checkbtn = Gtk.CheckButton(
+                    child=pill_container,
+                    name=name
+                )
+                checkbtn.connect('toggled', lambda *_: window.model_search_changed(window.searchentry_models))
+                container.append(checkbtn)
+    window.model_filter_button.set_popover(
+        Gtk.Popover(
+            child=container,
+            has_arrow=True
+        )
+    )
+
     for name, model_info in available_models.items():
         if 'small' in model_info['categories'] or 'medium' in model_info['categories'] or 'big' in model_info['categories'] or os.getenv('ALPACA_SHOW_HUGE_MODELS', '0') == '1':
             if 'embedding' not in model_info['categories'] or os.getenv('ALPACA_SHOW_EMBEDDING_MODELS', '0') == '1':

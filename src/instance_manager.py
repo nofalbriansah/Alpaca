@@ -29,7 +29,7 @@ class base_instance:
     instance_id = None
     name = _('Instance')
     instance_url = None
-    max_tokens = 4096
+    max_tokens = None
     api_key = None
     temperature = 0.7
     seed = 0
@@ -99,9 +99,9 @@ class base_instance:
                             attachment = bot_message.add_attachment(
                                 tool.name,
                                 'tool',
-                                '# {}\n\n## Arguments:\n{}\n\n## Result:\n\n{}'.format(
-                                    call.function.name,
-                                    '\n'.join(['- {}: {}'.format(k,v) for k, v in arguments.items()]),
+                                '# {}\n\n## Arguments:\n\n{}\n\n## Result:\n\n{}'.format(
+                                    tool.name,
+                                    '\n'.join(['- {}: {}'.format(k.replace('_', ' ').title(), v) for k, v in arguments.items()]),
                                     str(response)
                                 )
                             )
@@ -127,9 +127,10 @@ class base_instance:
         params = {
             "model": model,
             "messages": messages,
-            "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
+            "temperature": self.temperature
         }
+        if self.max_tokens:
+            params["max_tokens"] = self.max_tokens
         if self.instance_type != 'anthropic':
             params["stream"] = True
             if tools:
@@ -171,7 +172,7 @@ class base_instance:
             "temperature": 0.2,
             "model": model,
             "messages": messages,
-            "max_tokens": 100
+            "max_tokens": 50
         }
         new_chat_title = chat.get_name()
         try:
@@ -264,7 +265,7 @@ class base_instance:
                 adjustment=Gtk.Adjustment(
                     value=self.max_tokens,
                     lower=50,
-                    upper=8192,
+                    upper=16384,
                     step_increment=1
                 )
             )
@@ -417,9 +418,6 @@ class empty:
     instance_type_display = 'Empty'
     pinned = True
 
-    def __init__(self):
-        pass
-
     def stop(self):
         pass
 
@@ -465,7 +463,6 @@ class base_ollama(base_instance):
         except Exception as e:
             dialog_widget.simple_error(_('Instance Error'), _('Could not retrieve available models'), e)
             logger.error(e)
-            window.instance_listbox.unselect_all()
         return {}
 
     def get_model_info(self, model_name:str) -> dict:
@@ -541,24 +538,25 @@ class ollama_managed(base_ollama):
     model_directory = os.path.join(data_dir, '.ollama', 'models')
     description = _('Local AI instance managed directly by Alpaca')
 
-    def __init__(self, instance_id:str, name:str, instance_url:str, temperature:float, seed:int, overrides:dict, model_directory:str, default_model:str, title_model:str, pinned:bool):
-        self.instance_id = instance_id
-        self.name = name
-        self.instance_url = instance_url
-        self.temperature = temperature
-        self.seed = seed
-        self.overrides = overrides
-        self.model_directory = model_directory
-        self.default_model = default_model
-        self.title_model = title_model
-        self.pinned = pinned
+    def __init__(self, data:dict={}):
+        self.instance_id = data.get('id', self.instance_id)
+        self.name = data.get('name', self.name)
+        self.instance_url = data.get('url', self.instance_url)
+        self.temperature = data.get('temperature', self.temperature)
+        self.seed = data.get('seed', self.seed)
+        self.overrides = data.get('overrides', self.overrides)
+        self.model_directory = data.get('model_directory', self.model_directory)
+        self.default_model = data.get('default_model', self.default_model)
+        self.title_model = data.get('title_model', self.title_model)
+        self.pinned = data.get('pinned', self.pinned)
         self.process = None
         self.log_raw = ''
         self.log_summary = ('', ['dim-label'])
-        self.client = openai.OpenAI(
-            base_url='{}/v1/'.format(self.instance_url).replace('\n', ''),
-            api_key=self.api_key if self.api_key else 'NO_KEY'
-        )
+        if self.instance_id:
+            self.client = openai.OpenAI(
+                base_url='{}/v1/'.format(self.instance_url).replace('\n', ''),
+                api_key=self.api_key if self.api_key else 'NO_KEY'
+            )
 
     def log_output(self, pipe):
         AMD_support_label = "\n<a href='https://github.com/Jeffser/Alpaca/wiki/Installing-Ollama'>{}</a>".format(_('Alpaca Support'))
@@ -621,8 +619,6 @@ class ollama_managed(base_ollama):
             'elements': ('name', 'port', 'temperature', 'seed', 'overrides', 'model_directory'),
             'suffix_element': suffix_button
         }
-        if not self.instance_id:
-            arguments['self'] = self
         return self.generate_preferences_page(**arguments)
 
 # Remote Connection Equivalent
@@ -632,47 +628,47 @@ class ollama(base_ollama):
     instance_url = 'http://0.0.0.0:11434'
     description = _('Local or remote AI instance not managed by Alpaca')
 
-    def __init__(self, instance_id:str, name:str, instance_url:str, api_key:str, temperature:float, seed:int, default_model:str, title_model:str, pinned:bool):
-        self.instance_id = instance_id
-        self.name = name
-        self.instance_url = instance_url
-        self.api_key = api_key
-        self.temperature = temperature
-        self.seed = seed
-        self.default_model = default_model
-        self.title_model = title_model
-        self.pinned = pinned
-        self.client = openai.OpenAI(
-            base_url='{}/v1/'.format(self.instance_url).replace('\n', ''),
-            api_key=self.api_key if self.api_key else 'NO_KEY'
-        )
+    def __init__(self, data:dict={}):
+        self.instance_id = data.get('id', self.instance_id)
+        self.name = data.get('name', self.name)
+        self.instance_url = data.get('url', self.instance_url)
+        self.api_key = data.get('api', self.api_key)
+        self.temperature = data.get('temperature', self.temperature)
+        self.seed = data.get('seed', self.seed)
+        self.default_model = data.get('default_model', self.default_model)
+        self.title_model = data.get('title_model', self.title_model)
+        self.pinned = data.get('pinned', self.pinned)
+        if self.instance_id:
+            self.client = openai.OpenAI(
+                base_url='{}/v1/'.format(self.instance_url).replace('\n', ''),
+                api_key=self.api_key if self.api_key else 'NO_KEY'
+            )
 
     def get_preferences_page(self) -> Adw.PreferencesPage:
         arguments = {
             'elements': ('name', 'url', 'api', 'temperature', 'seed')
         }
-        if not self.instance_id:
-            arguments['self'] = self
         return self.generate_preferences_page(**arguments)
 
 class base_openai(base_instance):
-    max_tokens = 256
+    max_tokens = 2048
     api_key = ''
 
-    def __init__(self, instance_id:str, name:str, max_tokens:int, api_key:str, temperature:float, seed:int, default_model:str, title_model:str, pinned:bool):
-        self.instance_id = instance_id
-        self.name = name
-        self.max_tokens = max_tokens
-        self.api_key = api_key
-        self.temperature = temperature
-        self.seed = seed
-        self.default_model = default_model
-        self.title_model = title_model
-        self.pinned = pinned
-        self.client = openai.OpenAI(
-            base_url=self.instance_url.replace('\n', ''),
-            api_key=self.api_key if self.api_key else 'NO_KEY'
-        )
+    def __init__(self, data:dict={}):
+        self.instance_id = data.get('id', self.instance_id)
+        self.name = data.get('name', self.name)
+        self.max_tokens = data.get('max_tokens', self.max_tokens)
+        self.api_key = data.get('api', self.api_key)
+        self.temperature = data.get('temperature', self.temperature)
+        self.seed = data.get('seed', self.seed)
+        self.default_model = data.get('default_model', self.default_model)
+        self.title_model = data.get('title_model', self.title_model)
+        self.pinned = data.get('pinned', self.pinned)
+        if self.instance_id:
+            self.client = openai.OpenAI(
+                base_url=self.instance_url.replace('\n', ''),
+                api_key=self.api_key if self.api_key else 'NO_KEY'
+            )
 
     def stop(self):
         pass
@@ -700,8 +696,6 @@ class base_openai(base_instance):
             arguments['elements'] = arguments['elements'] + ('seed',)
         if self.instance_type == 'openai:generic':
             arguments['elements'] = arguments['elements'] + ('url',)
-        if not self.instance_id:
-            arguments['self'] = self
         return self.generate_preferences_page(**arguments)
 
 class chatgpt(base_openai):
@@ -823,13 +817,6 @@ class lambda_labs(base_openai):
     instance_url = 'https://api.lambdalabs.com/v1/'
     description = _('Lambda Labs cloud inference API')
 
-    def __init__(self, instance_id:str, name:str, max_tokens:int, api_key:str, temperature:float, seed:int, default_model:str, title_model:str, pinned:bool):
-        super().__init__(instance_id, name, max_tokens, api_key, temperature, seed, default_model, title_model, pinned)
-        self.client = openai.OpenAI(
-            base_url=self.instance_url.replace('\n', ''),
-            api_key=self.api_key if self.api_key else 'NO_KEY'
-        )
-
     def get_local_models(self) -> list:
         try:
             response = requests.get('https://api.lambdalabs.com/v1/models', 
@@ -850,9 +837,9 @@ class generic_openai(base_openai):
     instance_type_display = _('OpenAI Compatible Instance')
     description = _('AI instance compatible with OpenAI library')
 
-    def __init__(self, instance_id:str, name:str, instance_url:str, max_tokens:int, api_key:str, temperature:float, seed:int, default_model:str, title_model:str, pinned:bool):
-        self.instance_url = instance_url
-        super().__init__(instance_id, name, max_tokens, api_key, temperature, seed, default_model, title_model, pinned)
+    def __init__(self, data:dict={}):
+        self.instance_url = data.get('url', self.instance_url)
+        super().__init__(data)
 
 class instance_row(Adw.ActionRow):
     __gtype_name__ = 'AlpacaInstanceRow'
@@ -896,32 +883,14 @@ def update_instance_list():
     window.instance_listbox.set_selection_mode(0)
     instances = window.sql_instance.get_instances()
     selected_instance = window.sql_instance.get_preference('selected_instance')
-    openai_compatible_instances = {
-        chatgpt.instance_type: chatgpt,
-        gemini.instance_type: gemini,
-        together.instance_type: together,
-        venice.instance_type: venice,
-        deepseek.instance_type: deepseek,
-        openrouter.instance_type: openrouter,
-        anthropic.instance_type: anthropic,
-        groq.instance_type: groq,
-        fireworks.instance_type: fireworks,
-        lambda_labs.instance_type: lambda_labs,
-    }
+    instance_dictionary = {i.instance_type: i for i in ready_instances}
     if len(instances) > 0:
         window.instance_manager_stack.set_visible_child_name('content')
         window.instance_listbox.set_selection_mode(1)
+        row_to_select = None
         for i, ins in enumerate(instances):
-            row = None
-            if ins.get('type') == 'ollama:managed' and shutil.which('ollama'):
-                row = instance_row(ollama_managed(ins.get('id'), ins.get('name'), ins.get('url'), ins.get('temperature'), ins.get('seed'), ins.get('overrides'), ins.get('model_directory'), ins.get('default_model'), ins.get('title_model'), ins.get('pinned')))
-            elif ins.get('type') == 'ollama':
-                row = instance_row(ollama(ins.get('id'), ins.get('name'), ins.get('url'), ins.get('api'), ins.get('temperature'), ins.get('seed'), ins.get('default_model'), ins.get('title_model'), ins.get('pinned')))
-            elif ins.get('type') == 'openai:generic':
-                row = instance_row(generic_openai(ins.get('id'), ins.get('name'), ins.get('url'), ins.get('max_tokens'), ins.get('api'), ins.get('temperature'), ins.get('seed'), ins.get('default_model'), ins.get('title_model'), ins.get('pinned')))
-            elif openai_compatible_instances.get(ins.get('type')):
-                row = instance_row(openai_compatible_instances.get(ins.get('type'))(ins.get('id'), ins.get('name'), ins.get('max_tokens'), ins.get('api'), ins.get('temperature'), ins.get('seed'), ins.get('default_model'), ins.get('title_model'), ins.get('pinned')))
-            if row:
+            if ins.get('type') in list(instance_dictionary.keys()) and (ins.get('type') != 'ollama:managed' or shutil.which('ollama')):
+                row = instance_row(instance_dictionary.get(ins.get('type'))(ins))
                 window.instance_listbox.append(row)
                 if selected_instance == row.instance.instance_id:
                     row_to_select = row
@@ -936,8 +905,6 @@ def update_instance_list():
         window.instance_listbox.set_selection_mode(1)
         window.instance_listbox.select_row(row)
 
-ready_instances = [ollama, chatgpt, gemini, together, venice, deepseek, openrouter, anthropic, groq, fireworks, lambda_labs, generic_openai]
+ready_instances = [ollama_managed, ollama, chatgpt, gemini, together, venice, deepseek, openrouter, anthropic, groq, fireworks, lambda_labs, generic_openai]
 
-if shutil.which('ollama'):
-    ready_instances.insert(0, ollama_managed)
 

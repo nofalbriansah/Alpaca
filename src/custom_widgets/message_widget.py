@@ -8,10 +8,9 @@ gi.require_version('Gtk', '4.0')
 gi.require_version('GtkSource', '5')
 from gi.repository import Gtk, GObject, Gio, Adw, GtkSource, GLib, Gdk, GdkPixbuf
 import logging, os, datetime, re, shutil, threading, sys, base64, tempfile, time, random
-import matplotlib
-matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-import matplotlib.mathtext as mathtext
+from matplotlib.backends.backend_gtk4agg import FigureCanvasGTK4Agg as FigureCanvas
+from matplotlib.figure import Figure
 from PIL import Image
 from ..internal import config_dir, data_dir, cache_dir, source_dir
 from .table_widget import TableWidget
@@ -36,7 +35,7 @@ patterns = [
     ('code', re.compile(r'```([a-zA-Z0-9_+\-]*)\n(.*?)\n\s*```', re.DOTALL)),
     ('code', re.compile(r'`(\w*)\n(.*?)\n\s*`', re.DOTALL)),
     ('table', re.compile(r'((?:\| *[^|\r\n]+ *)+\|)(?:\r?\n)((?:\|[ :]?-+[ :]?)+\|)((?:(?:\r?\n)(?:\| *[^|\r\n]+ *)+\|)+)', re.MULTILINE)),
-    ('latex', re.compile(r'\\\[(.*?)\\\]|\$(.*?)\$', re.DOTALL))
+    ('latex', re.compile(r'\\\[(.*?)\\\]|\$+(.*?)\$+', re.DOTALL))
 ]
 
 SOLUTION_ENCLOSING_TAGS = [
@@ -164,18 +163,29 @@ class text_block(Gtk.Label):
         self.set_selectable(False)
         self.set_selectable(True)
 
-class generating_text_block(Gtk.TextView):
+class generating_text_block(Gtk.Overlay):
     __gtype_name__ = 'AlpacaGeneratingTextBlock'
 
     def __init__(self):
-        super().__init__(
+        textview = Gtk.TextView(
             hexpand=True,
             halign=0,
             editable=False,
             wrap_mode=3,
             css_classes=['flat']
         )
-        self.buffer = self.get_buffer()
+        self.buffer = textview.get_buffer()
+
+        super().__init__(
+            child=textview
+        )
+
+        self.add_overlay(Gtk.Box(
+            valign=2,
+            halign=0,
+            height_request=25,
+            css_classes=['generating_text_shadow']
+        ))
 
     def get_text(self) -> str:
         return self.buffer.get_text(self.buffer.get_start_iter(), self.buffer.get_end_iter(), False)
@@ -316,9 +326,7 @@ class attachment(Gtk.Button):
         button_content = Adw.ButtonContent(
             label=file_name,
             icon_name={
-                "plain_text": "document-text-symbolic",
                 "code": "code-symbolic",
-                "pdf": "document-text-symbolic",
                 "youtube": "play-symbolic",
                 "website": "globe-symbolic",
                 "thought": "brain-augemnted-symbolic",
@@ -434,90 +442,55 @@ class image_container(Gtk.ScrolledWindow):
         self.files.append(img)
         self.set_max_content_width(sum([f.width for f in self.files] + [12*(len(self.files)-1)]))
 
-class latex_image(Gtk.MenuButton):
-    __gtype_name__ = 'AlpacaLatexImage'
+class latex_renderer(Gtk.Button):
+    __gtype_name__ = 'AlpacaLatexRenderer'
 
-    def __init__(self, equation:str):
-        self.equation = equation
-        copy_button = Gtk.Button(
-            icon_name='edit-copy-symbolic',
-            tooltip_text=_('Copy Equation'),
-            css_classes=['flat']
-        )
-        copy_button.connect('clicked', lambda button: self.copy_equation())
-        regenerate_button = Gtk.Button(
-            icon_name='update-symbolic',
-            tooltip_text=_('Regenerate Equation'),
-            css_classes=['flat']
-        )
-        regenerate_button.connect('clicked', lambda button: self.generate_image(True))
-        popover_container = Gtk.Box(spacing=10)
-        popover_container.append(copy_button)
-        popover_container.append(regenerate_button)
-        self.popover = Gtk.Popover(child=popover_container)
+    class latex_canvas(FigureCanvas):
+        __gtype_name__ = 'AlpacaLatexCanvas'
+
+        def __init__(self, eq):
+            fig = Figure(dpi=100)
+            fig.patch.set_alpha(0)
+            ax = fig.add_subplot()
+            ax.axis('off')
+            text = ax.text(0.5, 0.5, eq, fontsize=24, ha='center', va='center')
+
+            fig.tight_layout()
+            fig.canvas.draw()
+            bbox = text.get_window_extent()
+            super().__init__(fig)
+            self.set_hexpand(True)
+            self.set_vexpand(True)
+            self.set_size_request(-1, bbox.height)
+            self.set_content_width(bbox.width)
+            self.set_css_classes(['latex_renderer'])
+            self.set_sensitive(False)
+
+    def __init__(self, equation):
+        self.eq = '${}$'.format(equation.replace('\\[', '').replace('\\]', '').replace('$', '').replace('\n', ''))
+
+        child = None
+        try:
+            child = Gtk.ScrolledWindow(
+                propagate_natural_height=True,
+                hscrollbar_policy=1,
+                vscrollbar_policy=2,
+                child=self.latex_canvas(self.eq)
+            )
+        except Exception as e:
+            child = Gtk.Label(label=str(e).strip(), css_classes=['error'], wrap=True)
+
         super().__init__(
-            halign=3,
-            popover=self.popover,
-            height_request=75,
-            css_classes=['flat'],
-            child=Adw.Spinner()
+            child=child,
+            css_classes=['flat', 'p10'],
+            tooltip_text=_('Copy Equation')
         )
-        threading.Thread(target=self.generate_image, args=(True,)).start()
+        self.connect('clicked', lambda button: self.copy_equation())
 
     def copy_equation(self):
-        self.popover.popdown()
         clipboard = Gdk.Display().get_default().get_clipboard()
-        clipboard.set(self.equation)
+        clipboard.set(self.eq[1:-1])
         window.show_toast(_("Equation copied to the clipboard"), window.main_overlay)
-
-    def generate_image(self, use_TeX:bool):
-        self.popover.popdown()
-        self.set_tooltip_text(_('LaTeX Equation'))
-        if use_TeX:
-            eq = self.equation
-        else:
-            eq = '${}$'.format(self.equation.replace('\\[', '').replace('\\]', '').replace('$', '').replace('\n', ''))
-        try:
-            picture = Gtk.Picture(
-                css_classes=['latex_equation'],
-                content_fit=1,
-                vexpand=True
-            )
-            with tempfile.TemporaryDirectory() as temp_path:
-                png_path = os.path.join(temp_path, 'equation.png')
-                fig, ax = plt.subplots()
-                ax.text(0.5, 0.5, eq, fontsize=24, ha='center', va='center', usetex=use_TeX)
-                ax.axis('off')
-                fig.patch.set_alpha(0.0)
-                plt.savefig(png_path, format='png', bbox_inches="tight", pad_inches=0, transparent=True)
-                plt.close(fig)
-
-                img = Image.open(png_path).convert("RGBA")
-                bbox = img.getbbox()
-                if bbox:
-                    cropped_image = img.crop(bbox)
-                    width, height = cropped_image.size
-                    cropped_image.save(png_path)
-
-                picture.set_filename(png_path)
-                picture.set_alternative_text(self.equation)
-                self.set_child(picture)
-        except Exception as e:
-            if use_TeX:
-                self.generate_image(False)
-            else:
-                logger.error(e)
-                label = Gtk.Label(
-                    label=eq,
-                    wrap_mode=2,
-                    wrap=True,
-                    ellipsize=3,
-                    css_classes=['error']
-                )
-                error = str(e)
-                if 'ParseSyntaxException' in error:
-                    self.set_tooltip_text(error.split('ParseSyntaxException: ')[-1])
-                self.set_child(label)
 
 class option_popup(Gtk.Popover):
     __gtype_name__ = 'AlpacaMessagePopup'
@@ -632,7 +605,6 @@ class footer(Gtk.Box):
         label = Gtk.Label(
             hexpand=True,
             wrap=True,
-            ellipsize=3,
             wrap_mode=2,
             margin_end=5,
             margin_start=5 if message_element.profile_picture_data else 0,
@@ -704,7 +676,7 @@ class footer(Gtk.Box):
 class message(Gtk.Box):
     __gtype_name__ = 'AlpacaMessage'
 
-    def __init__(self, message_id:str, dt:datetime.datetime, model:str=None, system:bool=False):
+    def __init__(self, message_id:str, dt:datetime.datetime=None, model:str=None, system:bool=False, show_footer:bool=True):
         self.message_id = message_id
         self.bot = model != None
         self.system = system
@@ -739,7 +711,8 @@ class message(Gtk.Box):
         )
 
         self.append(self.container)
-        self.add_footer()
+        if show_footer:
+            self.add_footer()
 
     def update_profile_picture(self):
         if self.bot and self.model:
@@ -808,7 +781,8 @@ class message(Gtk.Box):
             self.text = self.content_children[-1].get_text()
             GLib.idle_add(self.set_text, self.content_children[-1].get_text())
             self.dt = datetime.datetime.now()
-            window.show_notification(chat.get_name(), self.text[:200] + (self.text[200:] and '...'), Gio.ThemedIcon.new("chat-message-new-symbolic"))
+            if self.text:
+                window.show_notification(chat.get_name(), self.text[:200] + (self.text[200:] and '...'), Gio.ThemedIcon.new("chat-message-new-symbolic"))
             if chat.quick_chat:
                 GLib.idle_add(window.quick_ask_save_button.set_sensitive, True)
             else:
@@ -848,7 +822,7 @@ class message(Gtk.Box):
                     if pattern_name == "code":
                         parts.append(
                             {
-                                "type": pattern_name,
+                                "type": 'latex' if match.group(1).lower() == 'latex' else pattern_name,
                                 "text": match.group(2),
                                 "language": match.group(1),
                             }
@@ -859,7 +833,11 @@ class message(Gtk.Box):
                         expression = match.group(1)
                         if not expression:
                             expression = match.group(2)
-                        parts.append({"type": pattern_name, "text": expression})
+
+                        if '\\' not in expression:
+                            parts.append({"type": 'normal', "text": ' `{}` '.format(expression)})
+                        else:
+                            parts.append({"type": pattern_name, "text": expression})
                     else:
                         parts.append({"type": pattern_name, "text": match.group(1)})
 
@@ -875,18 +853,22 @@ class message(Gtk.Box):
 
             for part in parts:
                 if part['type'] == 'normal':
-                    text_b = text_block(self.bot, self.system)
+                    if len(self.content_children) > 0 and isinstance(self.content_children[-1], text_block):
+                        text_b = self.content_children[-1]
+                    else:
+                        text_b = text_block(self.bot, self.system)
                     part['text'] = GLib.markup_escape_text(part['text'])
                     part['text'] = part['text'].replace("\n* ", "\n• ")
+                    part['text'] = part['text'].replace("\n- ", "\n• ")
                     part['text'] = re.sub(r'`([^`\n]*?)`', r'<tt>\1</tt>', part['text'])
                     part['text'] = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', part['text'], flags=re.MULTILINE)
                     part['text'] = re.sub(r'^#\s+(.*)', r'<span size="xx-large">\1</span>', part['text'], flags=re.MULTILINE)
                     part['text'] = re.sub(r'^##\s+(.*)', r'<span size="x-large">\1</span>', part['text'], flags=re.MULTILINE)
                     part['text'] = re.sub(r'^###\s+(.*)', r'<span size="large">\1</span>', part['text'], flags=re.MULTILINE)
+                    part['text'] = re.sub(r'^####\s+(.*)', r'<span size="medium" weight="bold">\1</span>', part['text'], flags=re.MULTILINE)
                     part['text'] = re.sub(r'_(\((.*?)\)|\d+)', r'<sub>\2\1</sub>', part['text'], flags=re.MULTILINE)
                     part['text'] = re.sub(r'\^(\((.*?)\)|\d+)', r'<sup>\2\1</sup>', part['text'], flags=re.MULTILINE)
                     part['text'] = re.sub(r'\[(.*?)\]\((.*?)\)', r'<a href="\1">\2</a>', part['text'], flags=re.MULTILINE)
-                    part['text'] = re.sub(r'\s\[(.*?)\]\s', r' <a href="\1">\1</a> ', part['text'], flags=re.MULTILINE)
                     pos = 0
 
                     for match in markup_pattern.finditer(part['text']):
@@ -898,10 +880,10 @@ class message(Gtk.Box):
 
                     if pos < len(part['text']):
                         text_b.raw_text += part['text'][pos:]
-                    if text_b.raw_text:
+                    if text_b.raw_text and not text_b.get_parent():
                         self.content_children.append(text_b)
                         self.container.append(text_b)
-                        GLib.idle_add(text_b.set_markup,text_b.raw_text)
+                    GLib.idle_add(text_b.set_markup,text_b.raw_text)
                 elif part['type'] == 'code':
                     code_b = code_block(part['text'], part['language'])
                     self.content_children.append(code_b)
@@ -911,7 +893,7 @@ class message(Gtk.Box):
                     self.content_children.append(table_w)
                     self.container.append(table_w)
                 elif part['type'] == 'latex':
-                    latex_w = latex_image(part['text'])
+                    latex_w = latex_renderer(part['text'])
                     self.content_children.append(latex_w)
                     self.container.append(latex_w)
                 elif part['type'] == 'think' and part['text'].strip():

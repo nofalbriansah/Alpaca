@@ -34,6 +34,10 @@ import time
 import requests
 import sqlite3
 import sys
+import whisper
+import pyaudio
+import icu
+import numpy as np
 
 from datetime import datetime
 from io import BytesIO
@@ -42,7 +46,7 @@ from PIL import Image
 import gi
 import odf.opendocument as odfopen
 import odf.table as odftable
-from pypdf import PdfReader
+from markitdown import MarkItDown
 from pydbus import SessionBus, Variant
 
 gi.require_version('GtkSource', '5')
@@ -52,7 +56,7 @@ gi.require_version('Spelling', '1')
 from gi.repository import Adw, Gtk, Gdk, GLib, GtkSource, Gio, GdkPixbuf, Spelling, GObject
 
 from . import generic_actions, sql_manager, instance_manager, tool_manager
-from .constants import AlpacaFolders, Platforms
+from .constants import AlpacaFolders, Platforms, SPEACH_RECOGNITION_LANGUAGES
 from .custom_widgets import message_widget, chat_widget, terminal_widget, dialog_widget, model_manager_widget
 from .internal import config_dir, data_dir, cache_dir, source_dir, IN_FLATPAK
 
@@ -86,8 +90,7 @@ class AlpacaWindow(Adw.ApplicationWindow):
     selected_chat_row : Gtk.ListBoxRow = None
     preferences_dialog = Gtk.Template.Child()
     file_preview_dialog = Gtk.Template.Child()
-    file_preview_text = Gtk.Template.Child()
-    file_preview_image = Gtk.Template.Child()
+    preview_file_bin = Gtk.Template.Child()
     welcome_carousel = Gtk.Template.Child()
     welcome_previous_button = Gtk.Template.Child()
     welcome_next_button = Gtk.Template.Child()
@@ -105,11 +108,13 @@ class AlpacaWindow(Adw.ApplicationWindow):
     file_preview_open_button = Gtk.Template.Child()
     file_preview_remove_button = Gtk.Template.Child()
     model_searchbar = Gtk.Template.Child()
+    searchentry_models = Gtk.Template.Child()
     model_search_button = Gtk.Template.Child()
     message_searchbar = Gtk.Template.Child()
     searchentry_messages = Gtk.Template.Child()
     title_stack = Gtk.Template.Child()
     title_no_model_button = Gtk.Template.Child()
+    model_filter_button = Gtk.Template.Child()
 
     file_filter_db = Gtk.Template.Child()
     file_filter_gguf = Gtk.Template.Child()
@@ -122,6 +127,8 @@ class AlpacaWindow(Adw.ApplicationWindow):
 
     background_switch = Gtk.Template.Child()
     powersaver_warning_switch = Gtk.Template.Child()
+    mic_auto_send_switch = Gtk.Template.Child()
+    mic_language_combo = Gtk.Template.Child()
 
     banner = Gtk.Template.Child()
 
@@ -152,9 +159,94 @@ class AlpacaWindow(Adw.ApplicationWindow):
     tool_listbox = Gtk.Template.Child()
     model_manager_bottom_view_switcher = Gtk.Template.Child()
     model_manager_top_view_switcher = Gtk.Template.Child()
+    microphone_stack = Gtk.Template.Child()
+    microphone_button = Gtk.Template.Child()
     last_selected_instance_row = None
 
     sql_instance = sql_manager.Instance(os.path.join(data_dir, "alpaca.db"))
+    mid = MarkItDown(enable_plugins=False)
+
+    @Gtk.Template.Callback()
+    def microphone_toggled(self, button):
+        def show_pull_toast():
+            if self.microphone_stack.get_visible_child_name() == "loading":
+                size = {
+                    'tiny': '~75mb',
+                    'base': '~151mb',
+                    'small': '~488mb',
+                    'medium': '~1.5gb',
+                    'large': '~2.9gb'
+                }
+                self.show_toast(_("Speech recognition model is being downloaded ({})").format(size.get(os.getenv("ALPACA_SPEECH_MODEL", "base"), '~151mb')), self.main_overlay)
+
+        def run_mic():
+            GLib.idle_add(self.microphone_stack.set_visible_child_name, "loading")
+            GLib.idle_add(button.add_css_class, 'accent')
+
+            samplerate=16000
+            timeout=0
+            buffer=self.message_text_view.get_buffer()
+            p = pyaudio.PyAudio()
+            model = None
+            language=self.sql_instance.get_preference('mic_language')
+
+            try:
+                GLib.timeout_add(3000, show_pull_toast)
+                model = whisper.load_model(os.getenv("ALPACA_SPEECH_MODEL", "base"))
+            except Exception as e:
+                dialog_widget.simple_error(_('Speech Recognition Error'), _('An error occurred while pulling speech recognition model'), e)
+                logger.error(e)
+            GLib.idle_add(self.microphone_stack.set_visible_child_name, "button")
+
+            if model:
+                stream = p.open(
+                    format=pyaudio.paInt16,
+                    rate=samplerate,
+                    input=True,
+                    frames_per_buffer=1024,
+                    channels=1
+                )
+
+                try:
+                    while button.get_active():
+                        frames = []
+                        for i in range(0, int(samplerate / 1024 * 2)):
+                            data = stream.read(1024, exception_on_overflow=False)
+                            frames.append(np.frombuffer(data, dtype=np.int16))
+                        audio_data = np.concatenate(frames).astype(np.float32) / 32768.0
+                        result = model.transcribe(audio_data, language=language)
+
+                        if len(result.get("text").encode('utf8')) == 0:
+                            timeout += 1
+                        else:
+                            buffer.insert(buffer.get_end_iter(), result.get("text"), len(result.get("text").encode('utf8')))
+                            timeout = 0
+
+                        if timeout >= 2 and self.sql_instance.get_preference('mic_auto_send', False) and self.message_text_view.get_buffer().get_text(self.message_text_view.get_buffer().get_start_iter(), self.message_text_view.get_buffer().get_end_iter(), False):
+                            GLib.idle_add(self.send_message)
+                            break
+
+                except Exception as e:
+                    dialog_widget.simple_error(_('Speech Recognition Error'), _('An error occurred while using speech recognition'), e)
+                    logger.error(e)
+                finally:
+                    stream.stop_stream()
+                    stream.close()
+                    p.terminate()
+
+                #if timeout >= 2 and self.sql_instance.get_preference('mic_auto_send', False) and button.get_active():
+
+
+            if button.get_active():
+                button.set_active(False)
+
+        if button.get_active():
+            threading.Thread(target=run_mic).start()
+        else:
+            button.remove_css_class('accent')
+            button.set_sensitive(False)
+            GLib.timeout_add(2000, lambda button: button.set_sensitive(True) and False, button)
+
 
     @Gtk.Template.Callback()
     def closing_notice(self, dialog):
@@ -170,11 +262,19 @@ class AlpacaWindow(Adw.ApplicationWindow):
 
     @Gtk.Template.Callback()
     def add_instance(self, button):
-        def selected(ins:str):
-            tbv=Adw.ToolbarView()
-            tbv.add_top_bar(Adw.HeaderBar())
-            tbv.set_content(ins.get_preferences_page(ins))
-            self.main_navigation_view.push(Adw.NavigationPage(title=_('Add Instance'), tag='instance', child=tbv))
+        def selected(ins):
+            if ins.instance_type == 'ollama:managed' and not shutil.which('ollama'):
+                dialog_widget.simple(
+                    _("Ollama Was Not Found"),
+                    _("To add a managed Ollama instance, you must have Ollama installed locally in your device, this is a simple process and should not take more than 5 minutes."),
+                    lambda: Gio.AppInfo.launch_default_for_uri('https://github.com/Jeffser/Alpaca/wiki/Installing-Ollama'),
+                    _("Open Tutorial in Web Browser")
+                )
+            else:
+                tbv=Adw.ToolbarView()
+                tbv.add_top_bar(Adw.HeaderBar())
+                tbv.set_content(ins().get_preferences_page())
+                self.main_navigation_view.push(Adw.NavigationPage(title=_('Add Instance'), tag='instance', child=tbv))
 
         options = {}
         for ins_type in instance_manager.ready_instances:
@@ -386,8 +486,11 @@ class AlpacaWindow(Adw.ApplicationWindow):
             return
 
         current_model = model_manager_widget.get_selected_model().get_name()
+        if mode == 2 and len(tool_manager.get_enabled_tools()) == 0:
+            self.show_toast(_("No tools enabled."), self.main_overlay, 'app.tool_manager', _('Open Tool Manager'))
+            return
         if 'ollama' in self.get_current_instance().instance_type and mode == 2 and 'tools' not in model_manager_widget.available_models.get(current_model.split(':')[0], {}).get('categories', []):
-            self.show_toast(_("'{}' does not support tools.").format(self.convert_model_name(current_model, 0)), self.main_overlay)
+            self.show_toast(_("'{}' does not support tools.").format(self.convert_model_name(current_model, 0)), self.main_overlay, 'app.model_manager', _('Open Model Manager'))
             return
         if current_model is None:
             self.show_toast(_("Please select a model before chatting"), self.main_overlay)
@@ -463,6 +566,16 @@ class AlpacaWindow(Adw.ApplicationWindow):
         self.sql_instance.insert_or_update_preferences({'run_on_background': switch.get_active()})
     
     @Gtk.Template.Callback()
+    def switch_mic_auto_send(self, switch, user_data):
+        logger.debug("Switching mic auto send")
+        self.sql_instance.insert_or_update_preferences({'mic_auto_send': switch.get_active()})
+
+    @Gtk.Template.Callback()
+    def selected_mic_language(self, combo, user_data):
+        language = combo.get_selected_item().get_string().split(' (')[-1][:-1]
+        self.sql_instance.insert_or_update_preferences({'mic_language': language})
+
+    @Gtk.Template.Callback()
     def switch_powersaver_warning(self, switch, user_data):
         logger.debug("Switching powersaver warning banner")
         if switch.get_active():
@@ -476,7 +589,7 @@ class AlpacaWindow(Adw.ApplicationWindow):
         threading.Thread(target=tool_manager.update_available_tools).start()
         if self.sql_instance.get_preference('skip_welcome_page', False):
             # Notice
-            if not self.sql_instance.get_preference('last_notice_seen') == self.notice_dialog.get_name() and IN_FLATPAK and not shutil.which('ollama'):
+            if not self.sql_instance.get_preference('last_notice_seen') == self.notice_dialog.get_name():
                 self.notice_dialog.present(self)
             self.prepare_alpaca()
         else:
@@ -523,10 +636,16 @@ class AlpacaWindow(Adw.ApplicationWindow):
 
     @Gtk.Template.Callback()
     def model_search_changed(self, entry):
+        filtered_categories = set()
+        if self.model_filter_button.get_popover():
+            filtered_categories = set([c.get_name() for c in list(self.model_filter_button.get_popover().get_child()) if c.get_active()])
         results_local = False
+
         if len(list(self.local_model_flowbox)) > 0:
             for model in list(self.local_model_flowbox):
-                model.set_visible(re.search(entry.get_text(), model.get_child().get_search_string(), re.IGNORECASE))
+                string_search = re.search(entry.get_text(), model.get_child().get_search_string(), re.IGNORECASE)
+                category_filter = len(filtered_categories) == 0 or model.get_child().get_search_categories() & filtered_categories or not self.model_searchbar.get_search_mode()
+                model.set_visible(string_search and category_filter)
                 results_local = results_local or model.get_visible()
                 if not model.get_visible() and model in self.local_model_flowbox.get_selected_children():
                     self.local_model_flowbox.unselect_all()
@@ -539,7 +658,9 @@ class AlpacaWindow(Adw.ApplicationWindow):
             self.available_models_stack_page.set_visible(True)
             self.model_creator_stack_page.set_visible(True)
             for model in list(self.available_model_flowbox):
-                model.set_visible(re.search(entry.get_text(), model.get_child().get_search_string(), re.IGNORECASE))
+                string_search = re.search(entry.get_text(), model.get_child().get_search_string(), re.IGNORECASE)
+                category_filter = len(filtered_categories) == 0 or model.get_child().get_search_categories() & filtered_categories or not self.model_searchbar.get_search_mode()
+                model.set_visible(string_search and category_filter)
                 results_available = results_available or model.get_visible()
                 if not model.get_visible() and model in self.available_model_flowbox.get_selected_children():
                     self.available_model_flowbox.unselect_all()
@@ -622,12 +743,15 @@ class AlpacaWindow(Adw.ApplicationWindow):
             if new_text != text:
                 editable.stop_emission_by_name("insert-text")
 
-    def show_toast(self, message:str, overlay):
+    def show_toast(self, message:str, overlay, action:str=None, action_name:str=None):
         logger.info(message)
         toast = Adw.Toast(
             title=message,
             timeout=2
         )
+        if action and action_name:
+            toast.set_action_name(action)
+            toast.set_button_label(action_name)
         overlay.add_toast(toast)
 
     def show_notification(self, title:str, body:str, icon:Gio.ThemedIcon=None):
@@ -649,30 +773,37 @@ class AlpacaWindow(Adw.ApplicationWindow):
             self.file_preview_remove_button.set_visible(False)
         if file_content:
             if file_type == 'image':
-                self.file_preview_image.set_visible(True)
-                self.file_preview_text.set_visible(False)
+                image_element = Gtk.Image(
+                    hexpand=True,
+                    vexpand=True,
+                    css_classes=['rounded_image']
+                )
                 image_data = base64.b64decode(file_content)
                 loader = GdkPixbuf.PixbufLoader.new()
                 loader.write(image_data)
                 loader.close()
                 pixbuf = loader.get_pixbuf()
                 texture = Gdk.Texture.new_for_pixbuf(pixbuf)
-                self.file_preview_image.set_from_paintable(texture)
-                self.file_preview_image.set_size_request(360, 360)
-                self.file_preview_image.set_overflow(1)
+                image_element.set_from_paintable(texture)
+                image_element.set_size_request(360, 360)
+                image_element.set_overflow(1)
+                self.preview_file_bin.set_child(image_element)
                 self.file_preview_dialog.set_title(file_name)
                 self.file_preview_open_button.set_visible(False)
             else:
-                self.file_preview_image.set_visible(False)
-                buffer = self.file_preview_text.get_buffer()
-                buffer.delete(buffer.get_start_iter(), buffer.get_end_iter())
-                buffer.insert(buffer.get_end_iter(), file_content, len(file_content.encode('utf-8')))
-                self.file_preview_text.set_visible(True)
+                msg_element = message_widget.message(message_id=0, model="Alpaca File Preview", show_footer=False)
+                msg_element.set_text(file_content)
+                msg_element.set_vexpand(True)
+                self.preview_file_bin.set_child(msg_element)
+
                 if file_type == 'youtube':
                     self.file_preview_dialog.set_title(file_content.split('\n')[0])
                     self.file_preview_open_button.set_name(file_content.split('\n')[2])
+                    self.file_preview_open_button.set_visible(True)
                 elif file_type == 'website':
+                    self.file_preview_dialog.set_title(file_name)
                     self.file_preview_open_button.set_name(file_content.split('\n')[0])
+                    self.file_preview_open_button.set_visible(True)
                 else:
                     self.file_preview_dialog.set_title(file_name)
                     self.file_preview_open_button.set_visible(False)
@@ -714,11 +845,11 @@ class AlpacaWindow(Adw.ApplicationWindow):
 
     def get_content_of_file(self, file_path, file_type):
         if not os.path.exists(file_path): return None
-        if file_type == 'image':
+        if file_type in ('image', 'profile_picture'):
+            max_size = {'image': 640, 'profile_picture': 128}.get(file_type)
             try:
                 with Image.open(file_path) as img:
                     width, height = img.size
-                    max_size = 640
                     if width > height:
                         new_width = max_size
                         new_height = int((max_size / width) * height)
@@ -733,35 +864,11 @@ class AlpacaWindow(Adw.ApplicationWindow):
             except Exception as e:
                 logger.error(e)
                 self.show_toast(_("Cannot open image"), self.main_overlay)
-        elif file_type == 'profile_picture':
-            try:
-                with Image.open(file_path) as img:
-                    width, height = img.size
-                    max_size = 128
-                    if width > height:
-                        new_width = max_size
-                        new_height = int((max_size / width) * height)
-                    else:
-                        new_height = max_size
-                        new_width = int((max_size / height) * width)
-                    resized_img = img.resize((new_width, new_height), Image.LANCZOS)
-                    with BytesIO() as output:
-                        resized_img.save(output, format="PNG")
-                        image_data = output.getvalue()
-                    return base64.b64encode(image_data).decode("utf-8")
-            except Exception as e:
-                logger.error(e)
         elif file_type in ('plain_text', 'code', 'youtube', 'website'):
             with open(file_path, 'r', encoding="utf-8") as f:
                 return f.read()
-        elif file_type == 'pdf':
-            reader = PdfReader(file_path)
-            if len(reader.pages) == 0:
-                return None
-            text = ""
-            for i, page in enumerate(reader.pages):
-                text += f"\n- Page {i+1}\n{page.extract_text(extraction_mode='layout', layout_mode_space_vertically=False)}\n"
-            return text
+        elif file_type in ('pdf', 'docx', 'pptx', 'xlsx'):
+            return self.mid.convert(file_path).text_content
         elif file_type == 'odt':
             doc = odfopen.load(file_path)
             markdown_elements = []
@@ -811,13 +918,10 @@ class AlpacaWindow(Adw.ApplicationWindow):
                 label=file_name,
                 icon_name={
                     "image": "image-x-generic-symbolic",
-                    "plain_text": "document-text-symbolic",
                     "code": "code-symbolic",
-                    "pdf": "document-text-symbolic",
-                    "odt": "document-text-symbolic",
                     "youtube": "play-symbolic",
                     "website": "globe-symbolic"
-                }[file_type]
+                }.get(file_type, "document-text-symbolic")
             )
             button = Gtk.Button(
                 vexpand=True,
@@ -993,8 +1097,21 @@ class AlpacaWindow(Adw.ApplicationWindow):
 
         self.powersaver_warning_switch.set_active(self.sql_instance.get_preference('powersaver_warning', True))
         self.background_switch.set_active(self.sql_instance.get_preference('run_on_background', False))
+        self.mic_auto_send_switch.set_active(self.sql_instance.get_preference('mic_auto_send', False))
         self.zoom_spin.set_value(self.sql_instance.get_preference('zoom', 100))
         self.zoom_changed(self.zoom_spin, True)
+
+        selected_language = self.sql_instance.get_preference('mic_language', 'en')
+        selected_index = 0
+        string_list = Gtk.StringList()
+        for i, lan in enumerate(SPEACH_RECOGNITION_LANGUAGES):
+            if lan == selected_language:
+                selected_index = i
+            string_list.append('{} ({})'.format(icu.Locale(lan).getDisplayLanguage(icu.Locale(lan)).title(), lan))
+
+        self.mic_language_combo.set_model(string_list)
+        self.mic_language_combo.set_selected(selected_index)
+
         instance_manager.update_instance_list()
 
         if self.get_application().args.ask:
@@ -1102,7 +1219,15 @@ class AlpacaWindow(Adw.ApplicationWindow):
         ff = Gtk.FileFilter()
         ff.set_name(_('Any compatible Alpaca attachment'))
         file_filters = [ff]
-        for mime in ['text/plain', 'application/pdf', 'application/vnd.oasis.opendocument.text']:
+        mimes = (
+            'text/plain',
+            'application/pdf',
+            'application/vnd.oasis.opendocument.text',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        for mime in mimes:
             ff = Gtk.FileFilter()
             ff.add_mime_type(mime)
             file_filters[0].add_mime_type(mime)
@@ -1141,6 +1266,9 @@ class AlpacaWindow(Adw.ApplicationWindow):
         instance_manager.window = self
         tool_manager.window = self
 
+        self.model_searchbar.connect_entry(self.searchentry_models)
+        self.model_searchbar.connect('notify::search-mode-enabled', lambda *_: self.model_search_changed(self.searchentry_models))
+
         # Prepare model selector
         list(self.model_dropdown)[0].add_css_class('flat')
         self.model_dropdown.set_model(Gio.ListStore.new(model_manager_widget.local_model_row))
@@ -1158,7 +1286,12 @@ class AlpacaWindow(Adw.ApplicationWindow):
         drop_target = Gtk.DropTarget.new(Gdk.FileList, Gdk.DragAction.COPY)
         drop_target.connect('drop', self.on_file_drop)
         self.message_text_view = GtkSource.View(
-            css_classes=['message_text_view'], top_margin=10, bottom_margin=10, hexpand=True, wrap_mode=3
+            css_classes=['message_text_view'],
+            top_margin=10,
+            bottom_margin=10,
+            hexpand=True,
+            wrap_mode=3,
+            valign=3
         )
 
         self.message_text_view_scrolled_window.set_child(self.message_text_view)
@@ -1173,15 +1306,13 @@ class AlpacaWindow(Adw.ApplicationWindow):
             if keyval==Gdk.KEY_Return and not (state & Gdk.ModifierType.SHIFT_MASK): # Enter pressed without shift
                 if state & Gdk.ModifierType.CONTROL_MASK: # Ctrl, send system message
                     self.send_message(None, 1)
-                elif state & Gdk.ModifierType.ALT_MASK and os.getenv('ALPACA_ACTION_TESTING', '0') == '1': # Alt, send tool message
+                elif state & Gdk.ModifierType.ALT_MASK: # Alt, send tool message
                     self.send_message(None, 2)
                 else: # Nothing, send normal message
                     self.send_message(None, 0)
+                return True
         enter_key_controller.connect("key-pressed", enter_key_handler)
         self.message_text_view.add_controller(enter_key_controller)
-
-        if os.getenv('ALPACA_ACTION_TESTING', '0') == '1':
-            self.send_message_menu.append('Use Actions', 'app.use_tools')
 
         for name, data in {
             'send': {
@@ -1226,11 +1357,10 @@ class AlpacaWindow(Adw.ApplicationWindow):
             'instance_manager' : [lambda *i: self.show_instance_manager() if self.main_navigation_view.get_visible_page().get_tag() != 'instance_manager' else GLib.idle_add(self.main_navigation_view.pop_to_tag, 'chat'), ['<primary>i']],
             'download_model_from_name' : [lambda *i: dialog_widget.simple_entry(_('Download Model?'), _('Please enter the model name following this template: name:tag'), lambda name: threading.Thread(target=model_manager_widget.pull_model_confirm, args=(name,)).start(), {'placeholder': 'deepseek-r1:7b'})],
             'reload_added_models': [lambda *_: model_manager_widget.update_local_model_list()],
-            'delete_all_chats': [lambda *i: dialog_widget.simple(_('Delete All Chats?'), _('Are you sure you want to delete all chats?'), lambda: [GLib.idle_add(self.chat_list_box.delete_chat, c.chat_window.get_name()) for c in self.chat_list_box.tab_list], _('Delete'), 'destructive')]
+            'delete_all_chats': [lambda *i: dialog_widget.simple(_('Delete All Chats?'), _('Are you sure you want to delete all chats?'), lambda: [GLib.idle_add(self.chat_list_box.delete_chat, c.chat_window.get_name()) for c in self.chat_list_box.tab_list], _('Delete'), 'destructive')],
+            'use_tools': [lambda *_: self.send_message(None, 2)],
+            'tool_manager': [lambda *i: GLib.idle_add(self.main_navigation_view.push_by_tag, 'tool_manager') if self.main_navigation_view.get_visible_page().get_tag() != 'tool_manager' else GLib.idle_add(self.main_navigation_view.pop_to_tag, 'chat'), ['<primary>t']]
         }
-        if os.getenv('ALPACA_ACTION_TESTING', '0') == '1':
-            universal_actions['use_tools'] = [lambda *_: self.send_message(None, 2)]
-            universal_actions['tool_manager'] = [lambda *i: GLib.idle_add(self.main_navigation_view.push_by_tag, 'tool_manager') if self.main_navigation_view.get_visible_page().get_tag() != 'tool_manager' else GLib.idle_add(self.main_navigation_view.pop_to_tag, 'chat'), ['<primary>t']]
         for action_name, data in universal_actions.items():
             self.get_application().create_action(action_name, data[0], data[1] if len(data) > 1 else None)
 
