@@ -44,8 +44,15 @@ possible_prompts = [
     "Can you explain the basics of machine learning?",
     "What is photoelectric effect?",
     "What is the history of the Great Wall of China?",
-    "Tell me some Historical facts about Taj Mahal",
-    "Write a love story"    
+    "Tell me some historical facts about Taj Mahal",
+    "Write a love story",
+    "Write Shrödinger's equation in LaTeX",
+    "Write field equation in LaTeX",
+    "What is confirmation bias?",
+    "Tell me about your day",
+    "How to create a strong password",
+    "Tell me about sodium battery?",
+    "Prove Euler's identity"
 ]
 
 class chat(Gtk.Stack):
@@ -146,10 +153,13 @@ class chat(Gtk.Stack):
 
     def send_sample_prompt(self, prompt):
         if len(list(window.local_model_flowbox)) > 0:
-            buffer = window.message_text_view.get_buffer()
-            buffer.delete(buffer.get_start_iter(), buffer.get_end_iter())
-            buffer.insert(buffer.get_start_iter(), prompt, len(prompt.encode('utf-8')))
-            window.send_message()
+            if self.quick_chat:
+                window.quick_chat(prompt, 0)
+            else:
+                buffer = window.message_text_view.get_buffer()
+                buffer.delete(buffer.get_start_iter(), buffer.get_end_iter())
+                buffer.insert(buffer.get_start_iter(), prompt, len(prompt.encode('utf-8')))
+                window.send_message()
         elif window.get_current_instance().instance_type == 'empty':
             window.get_application().lookup_action('instance_manager').activate()
         else:
@@ -453,7 +463,6 @@ class chat_list(Gtk.ListBox):
         new_chat_id = window.generate_uuid()
         new_chat = self.prepend_chat(new_chat_name, new_chat_id)
         window.sql_instance.duplicate_chat(old_chat_window, new_chat)
-        threading.Thread(target=new_chat.load_chat_messages).start()
 
     def on_chat_imported(self, file_dialog, result):
         file = file_dialog.open_finish(result)
@@ -463,7 +472,6 @@ class chat_list(Gtk.ListBox):
             file.copy(Gio.File.new_for_path(os.path.join(cache_dir, 'import.db')), Gio.FileCopyFlags.OVERWRITE, None, None, None, None)
             for chat in window.sql_instance.import_chat(os.path.join(cache_dir, 'import.db'), [tab.chat_window.get_name() for tab in self.tab_list]):
                 new_chat = self.prepend_chat(chat[1], chat[0])
-                threading.Thread(target=new_chat.load_chat_messages).start()
         window.show_toast(_("Chat imported successfully"), window.main_overlay)
 
     def import_chat(self):

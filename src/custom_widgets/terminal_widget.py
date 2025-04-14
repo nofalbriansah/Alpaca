@@ -47,19 +47,19 @@ if sys.platform != 'win32':
             ctrl = state & Gdk.ModifierType.CONTROL_MASK
             shift = state & Gdk.ModifierType.SHIFT_MASK
             if ctrl and keyval == Gdk.KEY_c:
-                self.copy_clipboard()
+                self.copy_clipboard_format(1)
                 return True
             elif ctrl and keyval == Gdk.KEY_v:
                 self.paste_clipboard()
                 return True
             return False
 
-def show_terminal(script):
+def show_terminal(script, parent):
     if sys.platform != 'win32':
         window.terminal_scroller.set_child(terminal(script))
-        window.terminal_dialog.present(window)
+        window.terminal_dialog.present(parent)
 
-def run_terminal(files:dict):
+def run_terminal(files:dict, parent:Gtk.Widget=window):
     logger.info('Running Terminal')
     script = []
     if not os.path.isdir(os.path.join(data_dir, 'code runner')):
@@ -124,21 +124,21 @@ def run_terminal(files:dict):
                 f.write(content)
             script.append('python -m http.server 8080 --directory "{}"'.format(os.path.join(data_dir, 'code runner', 'html')))
             Gio.AppInfo.launch_default_for_uri('http://0.0.0.0:8080')
-        elif file_metadata['language'].lower() in ('bash', 'sh'):
+        elif file_metadata['language'].lower() in ('bash', 'sh', 'ssh'):
             if shutil.which('flatpak-spawn'):
                 sandbox = True
-                try:
+                """try:
                     process = subprocess.run(['flatpak-spawn', '--host', 'bash', '-c', 'echo "test"'], check=True)
                     sandbox = False
                 except Exception as e:
-                    pass
+                    pass"""
                 if sandbox:
-                    script.append('echo "🦙 {}\n"'.format(_('Using Flatpak contained shell')))
+                    script.append('echo "🦙 {}\n"'.format(_('Using Flatpak contained shell') if file_metadata['language'].lower() in ('bash', 'sh') else _('Using SSH to run command') ))
                     script.append(file_metadata['content'])
                 else:
                     script.append(file_metadata['content'])
                     show_terminal(['flatpak-spawn', '--host', 'bash', '-c', ';\n'.join(script)])
                     return
     script.append('echo -e "\n🦙 {}"'.format(_('Script Exited') ))
-    show_terminal(['bash', '-c', ';\n'.join(script)])
+    show_terminal(['bash', '-c', ';\n'.join(script)], parent)
 

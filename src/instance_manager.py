@@ -1,6 +1,6 @@
 # instance_manager.py
 """
-Manages AI instances (only Ollama for now)
+Manages AI instances
 """
 
 import gi
@@ -39,6 +39,7 @@ class base_instance:
     title_model = None
     pinned = False
     description = None
+    limitations = ()
 
     def prepare_chat(self, bot_message):
         chat = bot_message.get_chat()
@@ -119,25 +120,32 @@ class base_instance:
             bot_message.spinner = Adw.Spinner()
             bot_message.container.append(bot_message.spinner)
 
-        if self.instance_type in ('gemini', 'venice', 'anthropic'):
+        if 'no-system-messages' in self.limitations:
             for i in range(len(messages)):
                 if messages[i].get('role') == 'system':
                     messages[i]['role'] = 'user'
 
+        if 'text-only' in self.limitations:
+            for i in range(len(messages)):
+                for c in range(len(messages[i].get('content', []))):
+                    if messages[i].get('content')[c].get('type') != 'text':
+                        del messages[i]['content'][c]
+                    else:
+                        messages[i]['content'] = messages[i].get('content')[c].get('text')
+
         params = {
             "model": model,
             "messages": messages,
-            "temperature": self.temperature
+            "temperature": self.temperature,
+            "stream": True
         }
         if self.max_tokens:
             params["max_tokens"] = self.max_tokens
-        if self.instance_type != 'anthropic':
-            params["stream"] = True
-            if tools:
-                params["tools"] = tools
-                params["tool_choice"] = "none"
+        if tools:
+            params["tools"] = tools
+            params["tool_choice"] = "none"
 
-        if self.seed != 0 and self.instance_type not in ('gemini', 'venice'):
+        if self.seed != 0 and 'no-seed' in self.limitations:
             params["seed"] = self.seed
 
         try:
@@ -162,7 +170,7 @@ class base_instance:
             emoji:str = ""
 
         messages = [
-            {"role": "system" if self.instance_type not in ('gemini', 'venice', 'anthropic') else "user", "content": "You are an assistant that generates short chat titles based on the first message from a user. If you want to add an emoji, use the emoji character directly (e.g., 😀) instead of its description (e.g., ':happy_face:')."},
+            {"role": "user" if 'no-system-messages' in self.limitations else "system", "content": "You are an assistant that generates short chat titles based on the first message from a user. If you want to add an emoji, use the emoji character directly (e.g., 😀) instead of its description (e.g., ':happy_face:')."},
             {"role": "user", "content": "Generate a title for this prompt:\n{}".format(prompt)}
         ]
 
@@ -356,10 +364,10 @@ class base_instance:
         def save():
             save_functions = {
                 'name': lambda val: setattr(self, 'name', val if val else _('Instance')),
-                'port': lambda val: setattr(self, 'instance_url', 'http://0.0.0.0:{}'.format(val)),
+                'port': lambda val: setattr(self, 'instance_url', 'http://0.0.0.0:{}'.format(int(val))),
                 'url': lambda val: setattr(self, 'instance_url', '{}{}'.format('http://' if not re.match(r'^(http|https)://', val) else '', val.rstrip('/'))),
                 'api': lambda val: setattr(self, 'api_key', self.api_key if self.api_key and not val else (val if val else 'empty')),
-                'max_tokens': lambda val: setattr(self, 'max_tokens', val),
+                'max_tokens': lambda val: setattr(self, 'max_tokens', val if val else -1),
                 'temperature': lambda val: setattr(self, 'temperature', val),
                 'seed': lambda val: setattr(self, 'seed', val),
                 'override': lambda name, val: self.overrides.__setitem__(name, val),
@@ -541,7 +549,7 @@ class ollama_managed(base_ollama):
     def __init__(self, data:dict={}):
         self.instance_id = data.get('id', self.instance_id)
         self.name = data.get('name', self.name)
-        self.instance_url = data.get('url', self.instance_url)
+        self.instance_url = data.get('url', self.instance_url).removesuffix('.0')
         self.temperature = data.get('temperature', self.temperature)
         self.seed = data.get('seed', self.seed)
         self.overrides = data.get('overrides', self.overrides)
@@ -692,7 +700,7 @@ class base_openai(base_instance):
         arguments = {
             'elements': ('name', 'api', 'temperature', 'max_tokens')
         }
-        if self.instance_type not in ('gemini', 'venice'):
+        if 'no-seed' in self.limitations:
             arguments['elements'] = arguments['elements'] + ('seed',)
         if self.instance_type == 'openai:generic':
             arguments['elements'] = arguments['elements'] + ('url',)
@@ -707,6 +715,7 @@ class gemini(base_openai):
     instance_type = 'gemini'
     instance_type_display = 'Google Gemini'
     instance_url = 'https://generativelanguage.googleapis.com/v1beta/openai/'
+    limitations = ('no-system-messages', 'no-seed')
 
     def get_local_models(self) -> list:
         try:
@@ -727,7 +736,7 @@ class gemini(base_openai):
         try:
             response = requests.get('https://generativelanguage.googleapis.com/v1beta/models/{}?key={}'.format(model_name, self.api_key))
             data = response.json()
-            data['projector_info'] = True
+            data['vision'] = True
             return data
         except Exception as e:
             logger.error(e)
@@ -755,22 +764,26 @@ class venice(base_openai):
     instance_type = 'venice'
     instance_type_display = 'Venice'
     instance_url = 'https://api.venice.ai/api/v1/'
+    limitations = ('no-system-messages', 'no-seed')
 
 class deepseek(base_openai):
     instance_type = 'deepseek'
     instance_type_display = 'Deepseek'
     instance_url = 'https://api.deepseek.com/v1/'
+    limitations = ('text-only', 'no-seed')
 
 class groq(base_openai):
     instance_type = 'groq'
     instance_type_display = 'Groq Cloud'
     instance_url = 'https://api.groq.com/openai/v1'
+    limitations = ('text-only')
 
 class anthropic(base_openai):
     api_key = ''
     instance_type = 'anthropic'
     instance_type_display = 'Anthropic'
     instance_url = 'https://api.anthropic.com/v1/'
+    limitations = ('no-system-messages')
 
 class openrouter(base_openai):
     instance_type = 'openrouter'
@@ -832,6 +845,18 @@ class lambda_labs(base_openai):
             window.instance_listbox.unselect_all()
             return []
 
+class cerebras(base_openai):
+    instance_type = 'cerebras'
+    instance_type_display = 'Cerebras AI'
+    instance_url = 'https://api.cerebras.ai/v1/'
+    description = _('Cerebras AI cloud inference API')
+
+class klusterai(base_openai):
+    instance_type = 'klusterai'
+    instance_type_display = 'Kluster AI'
+    instance_url = 'https://api.kluster.ai/v1/'
+    description = _('Kluster AI cloud inference API')
+
 class generic_openai(base_openai):
     instance_type = 'openai:generic'
     instance_type_display = _('OpenAI Compatible Instance')
@@ -889,6 +914,8 @@ def update_instance_list():
         window.instance_listbox.set_selection_mode(1)
         row_to_select = None
         for i, ins in enumerate(instances):
+            if ins.get('max_tokens') == -1:
+                ins['max_tokens'] = None
             if ins.get('type') in list(instance_dictionary.keys()) and (ins.get('type') != 'ollama:managed' or shutil.which('ollama')):
                 row = instance_row(instance_dictionary.get(ins.get('type'))(ins))
                 window.instance_listbox.append(row)
@@ -905,6 +932,6 @@ def update_instance_list():
         window.instance_listbox.set_selection_mode(1)
         window.instance_listbox.select_row(row)
 
-ready_instances = [ollama_managed, ollama, chatgpt, gemini, together, venice, deepseek, openrouter, anthropic, groq, fireworks, lambda_labs, generic_openai]
+ready_instances = [ollama_managed, ollama, chatgpt, gemini, together, venice, deepseek, openrouter, anthropic, groq, fireworks, lambda_labs, cerebras, klusterai, generic_openai]
 
 

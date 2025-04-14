@@ -32,10 +32,10 @@ markup_pattern = re.compile(r'<(b|u|tt|a.*|span.*)>(.*?)<\/(b|u|tt|a|span)>')
 
 patterns = [
     ('think', re.compile(r'(?:<think>|<\|begin_of_thought\|>)\n+(.*?)\n+(?:<\/think>|<\|end_of_thought\|>)', re.DOTALL | re.IGNORECASE)),
+    ('latex', re.compile(r'\\\[\n*?(.*?)\n*?\\\]|\$+\n*?(.*?)\$+\n*?', re.DOTALL)),
     ('code', re.compile(r'```([a-zA-Z0-9_+\-]*)\n(.*?)\n\s*```', re.DOTALL)),
     ('code', re.compile(r'`(\w*)\n(.*?)\n\s*`', re.DOTALL)),
-    ('table', re.compile(r'((?:\| *[^|\r\n]+ *)+\|)(?:\r?\n)((?:\|[ :]?-+[ :]?)+\|)((?:(?:\r?\n)(?:\| *[^|\r\n]+ *)+\|)+)', re.MULTILINE)),
-    ('latex', re.compile(r'\\\[(.*?)\\\]|\$+(.*?)\$+', re.DOTALL))
+    ('table', re.compile(r'((?:\| *[^|\r\n]+ *)+\|)(?:\r?\n)((?:\|[ :]?-+[ :]?)+\|)((?:(?:\r?\n)(?:\| *[^|\r\n]+ *)+\|)+)', re.MULTILINE))
 ]
 
 SOLUTION_ENCLOSING_TAGS = [
@@ -303,7 +303,7 @@ class code_block(Gtk.Box):
                     file_name2, file_data2 = self.extract_code(block)
                     if file_data2['language'].lower() in ('css', 'js', 'javascript'):
                         files[file_name2] = file_data2
-        terminal_widget.run_terminal(files)
+        terminal_widget.run_terminal(files, self.get_root())
 
     def run_script(self, language_name):
         logger.debug("Running script")
@@ -314,7 +314,8 @@ class code_block(Gtk.Box):
             _('Make sure you understand what this script does before running it, Alpaca is not responsible for any damages to your device or data'),
             lambda *_: self.confirm_run_script(),
             _('Execute'),
-            'destructive'
+            'destructive',
+            self.get_root()
         )
 
 class attachment(Gtk.Button):
@@ -345,7 +346,7 @@ class attachment(Gtk.Button):
         if self.file_type == "link":
             self.connect("clicked", lambda button, uri=self.file_content: Gio.AppInfo.launch_default_for_uri(uri))
         else:
-            self.connect("clicked", lambda button, file_content=self.file_content, file_type=self.file_type: window.preview_file(self.get_name(), file_content, file_type, False))
+            self.connect("clicked", lambda button, file_content=self.file_content, file_type=self.file_type: window.preview_file(self.get_name(), file_content, file_type, False, button.get_root()))
 
 class attachment_container(Gtk.ScrolledWindow):
     __gtype_name__ = 'AlpacaAttachmentContainer'
@@ -394,7 +395,7 @@ class image(Gtk.Button):
                 tooltip_text=_("Image")
             )
             image.update_property([4], [_("Image")])
-            self.connect("clicked", lambda button, content=self.file_content: window.preview_file(self.get_name(), content, 'image', False))
+            self.connect("clicked", lambda button, content=self.file_content: window.preview_file(self.get_name(), content, 'image', False, button.get_root()))
         except Exception as e:
             logger.error(e)
             image_texture = Gtk.Image.new_from_icon_name("image-missing-symbolic")
@@ -467,7 +468,13 @@ class latex_renderer(Gtk.Button):
             self.set_sensitive(False)
 
     def __init__(self, equation):
-        self.eq = '${}$'.format(equation.replace('\\[', '').replace('\\]', '').replace('$', '').replace('\n', ''))
+        equation = equation.strip()
+        for p in ('\\[', '$$', '$'):
+            equation.removeprefix(p)
+        for s in ('\\]', '$$', '$'):
+            equation.removesuffix(s)
+        self.eq = '${}$'.format(equation)
+        print(self.eq)
 
         child = None
         try:
@@ -546,6 +553,19 @@ class option_popup(Gtk.Popover):
             self.regenerate_button.connect('clicked', lambda *_: self.regenerate_message())
             container.append(self.regenerate_button)
 
+        self.tts_stack = Gtk.Stack()
+        container.append(self.tts_stack)
+        self.tts_button = Gtk.ToggleButton(
+            halign=1,
+            hexpand=True,
+            icon_name='bullhorn-symbolic',
+            css_classes=["flat"],
+            tooltip_text=_("Dictate Message")
+        )
+        self.tts_button.connect('toggled', self.dictate_message)
+        self.tts_stack.add_named(self.tts_button, 'button')
+        self.tts_stack.add_named(Adw.Spinner(css_classes=['p10']), 'loading')
+
     def delete_message(self):
         logger.debug("Deleting message")
         chat = self.message_element.get_chat()
@@ -573,6 +593,43 @@ class option_popup(Gtk.Popover):
         self.message_element.content_children = []
         self.message_element.container.append(edit_text_b)
         window.set_focus(edit_text_b)
+
+    def dictate_message(self, button):
+        # I know I'm not supposed to be importing stuff inside functions
+        # but these libraries take a while to import and make the app launch 2x slower
+        def run(text:str, btn):
+            GLib.idle_add(self.tts_stack.set_visible_child_name, 'loading')
+            import sounddevice as sd
+            from kokoro import KPipeline
+            voice = window.sql_instance.get_preference('tts_voice', 'af_heart')
+            tts_engine = KPipeline(lang_code=voice[0])
+
+            generator = tts_engine(
+                text,
+                voice=voice,
+                speed=1.2,
+                split_pattern=r'\n+'
+            )
+            for gs, ps, audio in generator:
+                if not btn.get_active():
+                    break
+                sd.play(audio, samplerate=24000)
+                GLib.idle_add(self.tts_stack.set_visible_child_name, 'button')
+                sd.wait()
+            GLib.idle_add(self.tts_button.set_active, False)
+
+        if button.get_active():
+            GLib.idle_add(self.message_element.add_css_class, 'tts_message')
+            if window.message_dictated and window.message_dictated.footer.popup.tts_button.get_active():
+                 window.message_dictated.footer.popup.tts_button.set_active(False)
+            window.message_dictated = self.message_element
+            threading.Thread(target=run, args=(self.message_element.text, button)).start()
+        else:
+            import sounddevice as sd
+            GLib.idle_add(self.message_element.remove_css_class, 'tts_message')
+            GLib.idle_add(self.tts_stack.set_visible_child_name, 'button')
+            window.message_dictated = None
+            threading.Thread(target=sd.stop).start()
 
     def regenerate_message(self):
         chat = self.message_element.get_chat()
