@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_gtk4agg import FigureCanvasGTK4Agg as FigureCanvas
 from matplotlib.figure import Figure
 from PIL import Image
+from ..constants import TTS_VOICES
 from ..internal import config_dir, data_dir, cache_dir, source_dir
 from .table_widget import TableWidget
 from . import dialog_widget, terminal_widget, model_manager_widget
@@ -601,7 +602,19 @@ class option_popup(Gtk.Popover):
             GLib.idle_add(self.tts_stack.set_visible_child_name, 'loading')
             import sounddevice as sd
             from kokoro import KPipeline
-            voice = window.sql_instance.get_preference('tts_voice', 'af_heart')
+            voice = None
+            if self.message_element.model:
+                voice = window.sql_instance.get_model_preferences(self.message_element.model).get('voice', 'af_heart')
+            else:
+                voice = window.sql_instance.get_preference('tts_voice', 'af_heart')
+            if not voice:
+                voice = 'af_heart'
+            if model_manager_widget.tts_model_path:
+                if not os.path.islink(os.path.join(model_manager_widget.tts_model_path, '{}.pt'.format(voice))):
+                    pretty_name = [k for k, v in TTS_VOICES.items() if v == voice]
+                    if len(pretty_name) > 0:
+                        pretty_name = pretty_name[0]
+                        window.local_model_flowbox.append(model_manager_widget.text_to_speech_model(pretty_name))
             tts_engine = KPipeline(lang_code=voice[0])
 
             generator = tts_engine(
