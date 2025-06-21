@@ -7,11 +7,7 @@
 .chat_image_button {
   padding: 0;
 }
-.chat_image_button, .chat_image_button image, .rounded_image {
-  border-radius: 10px;
-}
-.editing_message_textview {
-  padding: 7px;
+.chat_image_button, .chat_image_button image, .rounded_image, .r10 {
   border-radius: 10px;
 }
 .model_list_box {
@@ -27,7 +23,7 @@
 .tts_message {
   border-radius: 10px;
 }
-.editing_message_textview:focus, .code_block:focus, .tts_message {
+.code_block:focus, .tts_message {
 	box-shadow: 0 0 1px 2px mix(@accent_color, @window_bg_color, 0.5);
 }
 .model_popover {
@@ -76,14 +72,14 @@ stacksidebar {
 .message > box {
   padding: 5px 5px 5px 5px;
 }
-.bottom_clamp {
-	padding: 12px;
-}
 .user_message label, .response_message > label, .response_message textview {
   padding: 5px;
 }
 .model_flowbox, .model_flowbox .model_box, .p10 {
   padding: 10px;
+}
+.p0 {
+  padding: 0px;
 }
 
 .model_flowbox flowboxchild {
@@ -115,8 +111,20 @@ stacksidebar {
   background-color: transparent;
 }
 
-.microphone_button {
-  border-radius: 0px 12px 12px 0px;
+.br0 {
+  border-radius: 0px;
+}
+
+.button_no_bold label {
+  font-weight: normal;
+}
+
+.camera_button {
+  border: solid white 2px;
+  transition: transform .2s;
+}
+.camera_button:hover {
+  transform: scale(1.1);
 }
 
 /*-----------MACOS STUFF-----------*/

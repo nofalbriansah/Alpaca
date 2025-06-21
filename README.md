@@ -15,6 +15,9 @@
 > [!IMPORTANT]
 > Please be aware that [GNOME Code of Conduct](https://conduct.gnome.org) applies to Alpaca before interacting with this repository.
 
+> [!WARNING]
+> AI generated issues and PRs will be denied, repeated offense will result in a ban from the repository, AI can be a useful tool but I don't want Alpaca to be vibe-developed, thanks.
+
 ## Features!
 
 - Talk to multiple models in the same conversation
@@ -28,9 +31,9 @@
 - Delete / Edit messages
 - Regenerate messages
 - YouTube recognition (Ask questions about a YouTube video using the transcript)
-- Website recognition (Ask questions about a certain website by parsing the url)
+- Website recognition (Ask questions about a certain website by pasting the URL)
 - Talk to cloud-hosted models with OpenAI-compatible APIs using your own API keys
-  
+
 ## Screenies
 
 Normal conversation | Image recognition | Custom Character | Integrated script execution | YouTube transcription

@@ -23,22 +23,24 @@ Main script run at launch, handles actions, about dialog and the app itself (not
 import gi
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
-from gi.repository import Gtk, Gio, Adw, GLib
+gi.require_version('GtkSource', '5')
+from gi.repository import Gtk, Gio, Adw, GtkSource
+GtkSource.init()
 
-from .internal import cache_dir, data_dir
+from .constants import TRANSLATORS, cache_dir, data_dir, config_dir, source_dir
+from .window import AlpacaWindow
+from .quick_ask import QuickAskWindow
+from .sql_manager import Instance as SQL
+
+SQL.initialize()
 
 import os
 os.environ["TORCH_HOME"] = os.path.join(data_dir, "torch")
 
-from .constants import TRANSLATORS, Platforms
-from .window import AlpacaWindow
-
 import sys
 import logging
 import argparse
-import json
 import time
-import sqlite3
 
 from pydbus import SessionBus
 from datetime import datetime
@@ -46,8 +48,6 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 parser = argparse.ArgumentParser(description="Alpaca")
-
-
 
 class AlpacaService:
     """
@@ -83,25 +83,28 @@ class AlpacaService:
         self.app.props.active_window.present()
 
     def PresentAsk(self):
-        self.app.props.active_window.quick_ask.present()
+        self.app.create_quick_ask().present()
 
     def Open(self, chat_name:str):
-        for chat_row in self.app.props.active_window.chat_list_box.tab_list:
+        for chat_row in list(self.app.props.active_window.chat_list_box):
             if chat_row.chat_window.get_name() == chat_name:
                 self.app.props.active_window.chat_list_box.select_row(chat_row)
                 self.Present()
 
     def Create(self, chat_name:str):
-        self.app.props.active_window.chat_list_box.new_chat(chat_name)
+        self.app.props.active_window.new_chat(chat_name)
         self.Present()
 
     def Ask(self, message:str):
         time.sleep(1)
-        self.app.props.active_window.quick_chat(message, 0)
+        quick_ask_window = self.app.create_quick_ask()
+        quick_ask_window.present()
+        quick_ask_window.write_and_send_message(message)
 
 class AlpacaApplication(Adw.Application):
     __gtype_name__ = 'AlpacaApplication'
-    """The main application singleton class."""
+
+    main_alpaca_window = None
 
     def __init__(self, version):
         super().__init__(application_id='com.jeffser.Alpaca',
@@ -132,16 +135,19 @@ class AlpacaApplication(Adw.Application):
                     app_service.PresentAsk()
                 sys.exit(0)
 
-    def do_activate(self):
-        win = self.props.active_window
-        if not win:
-            win = AlpacaWindow(application=self)
+    def create_quick_ask(self):
+        return QuickAskWindow(application=self)
 
-        if self.args.ask or self.args.quick_ask:
-            win.quick_ask.present()
+    def do_activate(self):
+        self.main_alpaca_window = self.props.active_window
+        if not self.main_alpaca_window:
+            self.main_alpaca_window = AlpacaWindow(application=self)
+        if self.args.quick_ask or self.args.ask:
+            self.create_quick_ask().present()
         else:
-            win.present()
-        if sys.platform == Platforms.mac_os: # MacOS
+            self.main_alpaca_window.present()
+
+        if sys.platform == 'darwin': # MacOS
             settings = Gtk.Settings.get_default()
             if settings:
                 settings.set_property('gtk-xft-antialias', 1)
@@ -149,11 +155,11 @@ class AlpacaApplication(Adw.Application):
                 settings.set_property('gtk-font-name', 'Microsoft Sans Serif')
                 settings.set_property('gtk-xft-dpi', 110592)
             win.add_css_class('macos')
-        elif sys.platform == Platforms.windows: # Windows
+        elif sys.platform == 'win32': # Windows
             settings = Gtk.Settings.get_default()
             if settings:
                 settings.set_property('gtk-font-name', 'Segoe UI')
-        if sys.platform in Platforms.ported: # MacOS and Windows
+        if sys.platform in ('win32', 'darwin'): # MacOS and Windows
             win.powersaver_warning_switch.set_visible(False)
             win.background_switch.set_visible(False)
 
@@ -209,10 +215,13 @@ def main(version):
         handlers=[logging.StreamHandler(stream=sys.stdout)]
     )
 
+    for directory in (cache_dir, data_dir, config_dir, source_dir):
+        if not os.path.isdir(directory):
+            os.mkdir(directory)
+
     parser.add_argument('--version', action='store_true', help='Display the application version and exit.')
     parser.add_argument('--new-chat', type=str, metavar='"CHAT"', help="Start a new chat with the specified title.")
     parser.add_argument('--list-chats', action='store_true', help='Display all the current chats')
-    parser.add_argument('--select-chat', type=str, metavar='"CHAT"', help="Select a chat on launch")
     parser.add_argument('--ask', type=str, metavar='"MESSAGE"', help="Open Quick Ask with message")
     parser.add_argument('--quick-ask', action='store_true', help='Open Quick Ask')
     args = parser.parse_args()
@@ -222,32 +231,14 @@ def main(version):
         sys.exit(0)
 
     if args.list_chats:
-        sqlite_con = sqlite3.connect(os.path.join(data_dir, "alpaca.db"))
-        cursor = sqlite_con.cursor()
-        chats = cursor.execute('SELECT chat.name, MAX(message.date_time) AS latest_message_time FROM chat LEFT JOIN message ON chat.id = message.chat_id GROUP BY chat.id ORDER BY latest_message_time DESC').fetchall()
+        chats = SQL.get_chats()
         if chats:
             for chat in chats:
-                print(chat[0])
+                print(chat[1])
         else:
             print()
-        sqlite_con.close()
         sys.exit(0)
 
-    if args.select_chat:
-        sqlite_con = sqlite3.connect(os.path.join(data_dir, "alpaca.db"))
-        cursor = sqlite_con.cursor()
-        cursor.execute("UPDATE preferences SET value=? WHERE id=?", (args.select_chat, 'selected_chat'))
-        sqlite_con.commit()
-        sqlite_con.close()
+    logger.info(f"Alpaca version: {version}")
 
-    cache_dir_path: str = os.path.join(cache_dir, 'tmp')
-    if os.path.isdir(cache_dir_path):
-        # TODO: Change this, this is error-prone.
-        # And very dangerous, if bwrap doesn't do a good job.
-        os.system('rm -rf ' + os.path.join(cache_dir, "tmp/*"))
-    else:
-        os.mkdir(cache_dir_path)
-
-    app = AlpacaApplication(version)
-    logger.info(f"Alpaca version: {app.version}")
-    return app.run([])
+    return AlpacaApplication(version).run([])

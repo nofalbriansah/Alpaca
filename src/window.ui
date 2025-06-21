@@ -149,6 +149,15 @@ Alpaca is distributed under GPL v3.0, this software comes with no warranty.</pro
                     <child type="top">
                       <object class="AdwHeaderBar">
                         <child type="start">
+                          <!--<object class="AdwSplitButton">
+                            <property name="action-name">app.new_chat</property>
+                            <property name="tooltip-text" translatable="yes">New Chat</property>
+                            <property name="icon-name">chat-message-new-symbolic</property>
+                            <property name="menu-model">new_chat_menu</property>
+                            <style>
+                              <class name="flat"/>
+                            </style>
+                          </object>-->
                           <object class="GtkButton">
                             <property name="action-name">app.new_chat</property>
                             <property name="tooltip-text" translatable="yes">New Chat</property>
@@ -166,12 +175,70 @@ Alpaca is distributed under GPL v3.0, this software comes with no warranty.</pro
                             <property name="menu-model">primary_menu</property>
                           </object>
                         </child>
+                        <child type="end">
+                          <object class="GtkToggleButton" id="chat_search_button">
+                            <property name="icon-name">edit-find-symbolic</property>
+                            <property name="tooltip-text" translatable="yes">Search Chats</property>
+                            <property name="active" bind-source="chat_searchbar" bind-property="search-mode-enabled" bind-flags="sync-create"/>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                    <child type="top">
+                      <object class="GtkSearchBar" id="chat_searchbar">
+                        <accessibility>
+                          <property name="label" translatable="yes">Chat search bar</property>
+                        </accessibility>
+                        <property name="search-mode-enabled" bind-source="chat_search_button" bind-property="active" bind-flags="sync-create"/>
+                        <child>
+                          <object class="GtkSearchEntry">
+                            <signal name="search-changed" handler="chat_search_changed"/>
+                            <property name="hexpand">true</property>
+                            <property name="search-delay">100</property>
+                            <property name="placeholder-text" translatable="yes">Search chats</property>
+                            <accessibility>
+                              <property name="label" translatable="yes">Search chats</property>
+                            </accessibility>
+                          </object>
+                        </child>
                       </object>
                     </child>
                     <property name="content">
-                      <object class="GtkScrolledWindow" id="chat_list_container">
-                        <property name="vexpand">true</property>
-                        <property name="hexpand">true</property>
+                      <object class="GtkStack" id="chat_list_stack">
+                        <property name="transition_duration">100</property>
+                        <property name="transition_type">1</property>
+                        <child>
+                          <object class="GtkStackPage">
+                            <property name="name">content</property>
+                            <property name="child">
+                              <object class="GtkScrolledWindow" id="chat_list_container">
+                                <property name="vexpand">true</property>
+                                <property name="hexpand">true</property>
+                                <property name="child">
+                                  <object class="GtkListBox" id="chat_list_box">
+                                    <signal name="row-selected" handler="chat_changed"/>
+                                    <property name="selection-mode">1</property>
+                                    <style>
+                                      <class name="navigation-sidebar"/>
+                                    </style>
+                                  </object>
+                                </property>
+                              </object>
+                            </property>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkStackPage">
+                            <property name="name">no-results</property>
+                            <property name="child">
+                              <object class="AdwStatusPage">
+                                <property name="icon-name">sad-computer-symbolic</property>
+                                <property name="title" translatable="yes">No Chats Found</property>
+                                <property name="description" translatable="yes">Oh no! It looks like there are no chats found for your search.</property>
+                              </object>
+                            </property>
+                          </object>
+                        </child>
                       </object>
                     </property>
                   </object>
@@ -279,7 +346,7 @@ Alpaca is distributed under GPL v3.0, this software comes with no warranty.</pro
                       </object>
                     </child>
                     <property name="content">
-                      <object class="GtkBox"><!--ACTUAL CONTENT-->
+                      <object class="GtkBox">
                         <property name="orientation">1</property>
                         <property name="vexpand">true</property>
                         <property name="hexpand">true</property>
@@ -293,7 +360,7 @@ Alpaca is distributed under GPL v3.0, this software comes with no warranty.</pro
                           <object class="GtkBox">
                             <property name="orientation">1</property>
                             <child>
-                              <object class="AdwToastOverlay" id="main_overlay">
+                              <object class="AdwToastOverlay" id="toast_overlay">
                                 <child>
                                   <object class="GtkStack" id="chat_stack">
                                     <property name="hexpand">true</property>
@@ -304,138 +371,9 @@ Alpaca is distributed under GPL v3.0, this software comes with no warranty.</pro
                               </object>
                             </child>
                             <child>
-                              <object class="AdwClamp">
+                              <object class="AdwClamp" id="global_footer_container">
                                 <property name="maximum-size">1000</property>
                                 <property name="tightening-threshold">800</property>
-                                <style>
-                                  <class name="bottom_clamp"/>
-                                </style>
-                                <child>
-                                  <object class="GtkBox">
-                                    <property name="orientation">1</property>
-                                    <property name="spacing">12</property>
-                                    <child>
-                                      <object class="GtkScrolledWindow" id="attachment_box">
-                                        <property name="visible">false</property>
-                                        <child>
-                                          <object class="GtkBox" id="attachment_container">
-                                            <property name="orientation">0</property>
-                                            <property name="vexpand">false</property>
-                                            <property name="spacing">12</property>
-                                          </object>
-                                        </child>
-                                      </object>
-                                    </child>
-                                    <child>
-                                      <object class="GtkBox">
-                                        <property name="spacing">12</property>
-                                        <child>
-                                          <object class="GtkButton" id="attachment_button">
-                                            <property name="vexpand">false</property>
-                                            <property name="valign">3</property>
-                                            <property name="tooltip-text" translatable="yes">Attach File</property>
-                                            <property name="action-name">app.attach_file</property>
-                                            <property name="icon-name">chain-link-loose-symbolic</property>
-                                            <style>
-                                              <class name="circular"/>
-                                            </style>
-                                          </object>
-                                        </child>
-                                        <child>
-                                          <object class="GtkBox">
-                                            <style>
-                                              <class name="card"/>
-                                            </style>
-                                            <property name="overflow">1</property>
-                                            <child>
-                                              <object class="GtkScrolledWindow" id="message_text_view_scrolled_window">
-                                                <property name="max-content-height">150</property>
-                                                <property name="propagate-natural-height">true</property>
-                                                <property name="min-content-height">1</property>
-                                                <style>
-                                                  <class name="undershoot-bottom"/>
-                                                </style>
-                                              </object>
-                                            </child>
-                                            <child>
-                                              <object class="GtkStack">
-                                                <child>
-                                                  <object class="GtkStackPage">
-                                                    <property name="name">button</property>
-                                                    <property name="child">
-                                                      <object class="GtkToggleButton">
-                                                        <property name="icon-name">audio-input-microphone-symbolic</property>
-                                                        <signal name="toggled" handler="microphone_toggled"/>
-                                                        <property name="tooltip-text" translatable="yes">Use Speech Recognition</property>
-                                                        <style>
-                                                          <class name="microphone_button"/>
-                                                        </style>
-                                                      </object>
-                                                    </property>
-                                                  </object>
-                                                </child>
-                                                <child>
-                                                  <object class="GtkStackPage">
-                                                    <property name="name">loading</property>
-                                                    <property name="child">
-                                                      <object class="AdwSpinner">
-                                                        <style>
-                                                          <class name="p10"/>
-                                                        </style>
-                                                      </object>
-                                                    </property>
-                                                  </object>
-                                                </child>
-                                              </object>
-                                            </child>
-                                          </object>
-                                        </child>
-                                        <child>
-                                          <object class="GtkStack" id="action_button_stack">
-                                            <property name="transition_type">1</property>
-                                            <child>
-                                              <object class="GtkStackPage">
-                                                <property name="name">send</property>
-                                                <property name="child">
-                                                  <object class="GtkButton">
-                                                    <signal name="clicked" handler="send_message"/>
-                                                    <property name="vexpand">false</property>
-                                                    <property name="valign">3</property>
-                                                    <property name="tooltip-text" translatable="yes">Send Message</property>
-                                                    <property name="icon-name">paper-plane-symbolic</property>
-                                                    <style>
-                                                      <class name="accent"/>
-                                                      <class name="circular"/>
-                                                      <class name="suggested-action"/>
-                                                    </style>
-                                                  </object>
-                                                </property>
-                                              </object>
-                                            </child>
-                                            <child>
-                                              <object class="GtkStackPage">
-                                                <property name="name">stop</property>
-                                                <property name="child">
-                                                  <object class="GtkButton">
-                                                    <signal name="clicked" handler="stop_message"/>
-                                                    <property name="vexpand">false</property>
-                                                    <property name="valign">3</property>
-                                                    <property name="tooltip-text" translatable="yes">Stop Message</property>
-                                                    <property name="icon-name">media-playback-stop-symbolic</property>
-                                                    <style>
-                                                      <class name="destructive-action"/>
-                                                      <class name="circular"/>
-                                                    </style>
-                                                  </object>
-                                                </property>
-                                              </object>
-                                            </child>
-                                          </object>
-                                        </child>
-                                      </object>
-                                    </child>
-                                  </object>
-                                </child>
                               </object>
                             </child>
                           </object>
@@ -661,6 +599,7 @@ Alpaca is distributed under GPL v3.0, this software comes with no warranty.</pro
                     </child>
                     <property name="content">
                       <object class="AdwViewStack" id="model_manager_stack">
+                        <property name="enable-transitions">true</property>
                         <signal name="notify::visible-child" handler="model_manager_stack_changed"/>
                         <child>
                           <object class="AdwViewStackPage">
@@ -860,7 +799,6 @@ Alpaca is distributed under GPL v3.0, this software comes with no warranty.</pro
                                             <child>
                                               <object class="AdwComboRow" id="model_creator_base">
                                                 <property name="title" translatable="yes">Base</property>
-                                                <property name="enable-search">true</property>
                                                 <signal name="notify::selected-item" handler="model_creator_base_changed"/>
                                               </object>
                                             </child>
@@ -1024,17 +962,14 @@ Alpaca is distributed under GPL v3.0, this software comes with no warranty.</pro
             <object class="AdwPreferencesGroup">
               <child>
                 <object class="AdwSwitchRow" id="background_switch">
-                  <signal name="notify::active" handler="switch_run_on_background"/>
                   <property name="title" translatable="yes">Run Alpaca In Background</property>
-                  <property name="sensitive">false</property>
+                  <property name="active" bind-source="AlpacaWindow" bind-property="hide-on-close" bind-flags="bidirectional"/>
                 </object>
               </child>
               <child>
                 <object class="AdwSwitchRow" id="powersaver_warning_switch">
-                  <signal name="notify::active" handler="switch_powersaver_warning"/>
                   <property name="title" translatable="yes">Show Power Saver Warning</property>
                   <property name="subtitle" translatable="yes">When running a managed Ollama instance</property>
-                  <property name="sensitive">false</property>
                 </object>
               </child>
               <child>
@@ -1053,25 +988,21 @@ Alpaca is distributed under GPL v3.0, this software comes with no warranty.</pro
             </object>
           </child>
           <child>
-            <object class="AdwPreferencesGroup">
+            <object class="AdwPreferencesGroup" id="mic_group">
               <child>
                 <object class="AdwComboRow" id="mic_model_combo">
-                  <signal name="notify::selected" handler="selected_mic_model"/>
                   <property name="title" translatable="yes">Speech Recognition Model</property>
                   <property name="subtitle" translatable="yes">Models are downloaded upon first use, you can delete them from the model manager</property>
-                  <property name="sensitive">false</property>
                 </object>
               </child>
               <child>
                 <object class="AdwComboRow" id="mic_language_combo">
-                  <signal name="notify::selected" handler="selected_mic_language"/>
                   <property name="title" translatable="yes">Speech Recognition Language</property>
                   <property name="sensitive">false</property>
                 </object>
               </child>
               <child>
                 <object class="AdwSwitchRow" id="mic_auto_send_switch">
-                  <signal name="notify::active" handler="switch_mic_auto_send"/>
                   <property name="title" translatable="yes">Auto Send Message After Talking</property>
                   <property name="sensitive">false</property>
                 </object>
@@ -1079,13 +1010,17 @@ Alpaca is distributed under GPL v3.0, this software comes with no warranty.</pro
             </object>
           </child>
           <child>
-            <object class="AdwPreferencesGroup">
+            <object class="AdwPreferencesGroup" id="tts_group">
               <child>
                 <object class="AdwComboRow" id="tts_voice_combo">
-                  <signal name="notify::selected" handler="selected_tts_voice"/>
-                  <property name="title" translatable="yes">Text to Speech Voice</property>
+                  <property name="title" translatable="yes">Default Text to Speech Voice</property>
                   <property name="subtitle" translatable="yes">Voices are downloaded upon first use, each weighing around 1 MB, and you can delete them from the model manager</property>
-                  <property name="sensitive">false</property>
+                </object>
+              </child>
+              <child>
+                <object class="AdwComboRow" id="tts_auto_mode_combo">
+                  <property name="title" translatable="yes">Dictate New Messages Automatically</property>
+                  <property name="subtitle" translatable="yes">Dictate new messages once they have finished being generated</property>
                 </object>
               </child>
             </object>
@@ -1193,180 +1128,19 @@ Alpaca is distributed under GPL v3.0, this software comes with no warranty.</pro
         </object>
       </child>
     </object>
-
-    <object class="AdwWindow" id="quick_ask">
-      <property name="name">AlpacaQuickAsk</property>
-      <signal name="close-request" handler="closing_quick_ask"/>
-      <accessibility>
-        <property name="label" translatable="yes">Quick ask dialog</property>
-      </accessibility>
-      <property name="title" translatable="yes">Quick Ask</property>
-      <property name="width-request">320</property>
-      <property name="height-request">240</property>
-      <child>
-        <object class="AdwToolbarView">
-          <child type="top">
-            <object class="AdwHeaderBar">
-              <child type="start">
-                <object class="GtkButton" id="quick_ask_save_button">
-                  <property name="icon-name">document-save-symbolic</property>
-                  <property name="tooltip-text" translatable="yes">Save Conversation to Alpaca</property>
-                  <property name="sensitive">false</property>
-                  <signal name="clicked" handler="quick_ask_save"/>
-                </object>
-              </child>
-            </object>
-          </child>
-          <property name="content">
-            <object class="AdwToastOverlay" id="quick_ask_overlay"/>
-          </property>
-          <child type="bottom">
-            <object class="GtkBox">
-              <property name="margin-top">10</property>
-              <property name="margin-bottom">10</property>
-              <property name="margin-start">10</property>
-              <property name="margin-end">10</property>
-              <style>
-                <class name="card"/>
-              </style>
-              <property name="overflow">1</property>
-              <child>
-                <object class="GtkScrolledWindow" id="quick_ask_text_view_scrolled_window">
-                  <property name="max-content-height">150</property>
-                  <property name="propagate-natural-height">true</property>
-                  <property name="min-content-height">1</property>
-                  <style>
-                    <class name="undershoot-bottom"/>
-                  </style>
-                </object>
-              </child>
-              <child>
-                <object class="GtkStack">
-                  <child>
-                    <object class="GtkStackPage">
-                      <property name="name">button</property>
-                      <property name="child">
-                        <object class="GtkToggleButton">
-                          <property name="icon-name">audio-input-microphone-symbolic</property>
-                          <signal name="toggled" handler="microphone_toggled"/>
-                          <property name="tooltip-text" translatable="yes">Use Speech Recognition</property>
-                          <style>
-                            <class name="microphone_button"/>
-                          </style>
-                        </object>
-                      </property>
-                    </object>
-                  </child>
-                  <child>
-                    <object class="GtkStackPage">
-                      <property name="name">loading</property>
-                      <property name="child">
-                        <object class="AdwSpinner">
-                          <style>
-                            <class name="p10"/>
-                          </style>
-                        </object>
-                      </property>
-                    </object>
-                  </child>
-                </object>
-              </child>
-            </object>
-          </child>
-        </object>
-      </child>
-    </object>
-
-    <object class="AdwDialog" id="terminal_dialog">
-      <accessibility>
-        <property name="label" translatable="yes">Terminal dialog</property>
-      </accessibility>
-      <signal name="close-attempt" handler="closing_terminal"/>
-      <property name="title" translatable="yes">Terminal</property>
-      <property name="can-close">false</property>
-      <property name="content-width">700</property>
-      <property name="content-height">600</property>
-      <child>
-        <object class="AdwToolbarView">
-          <style>
-            <class name="osd"/>
-          </style>
-          <child type="top">
-            <object class="AdwHeaderBar">
-              <child type="start">
-                <object class="GtkButton" id="terminal_dir_button">
-                  <signal name="clicked" handler="link_button_handler"/>
-                  <property name="tooltip-text" translatable="yes">Open Environment Directory</property>
-                  <property name="icon-name">document-open-symbolic</property>
-                  <style>
-                    <class name="flat"/>
-                  </style>
-                </object>
-              </child>
-            </object>
-          </child>
-          <property name="content">
-            <object class="GtkScrolledWindow" id="terminal_scroller">
-              <property name="propagate-natural-height">true</property>
-              <property name="propagate-natural-width">true</property>
-            </object>
-          </property>
-        </object>
-      </child>
-    </object>
-
-    <object class="AdwDialog" id="file_preview_dialog">
-      <accessibility>
-        <property name="label" translatable="yes">File preview dialog</property>
-      </accessibility>
-      <property name="follows-content-size">true</property>
-      <property name="can-close">true</property>
-      <child>
-        <object class="AdwToolbarView">
-          <child type="top">
-            <object class="AdwHeaderBar">
-              <child type="start">
-                <object class="GtkButton" id="file_preview_open_button">
-                  <signal name="clicked" handler="link_button_handler"/>
-                  <property name="tooltip-text" translatable="yes">Open With Default App</property>
-                  <property name="vexpand">false</property>
-                  <property name="valign">3</property>
-                  <property name="icon-name">share-symbolic</property>
-                </object>
-              </child>
-              <child type="start">
-                <object class="GtkButton" id="file_preview_remove_button">
-                  <property name="tooltip-text" translatable="yes">Remove Attachment</property>
-                  <property name="vexpand">false</property>
-                  <property name="valign">3</property>
-                  <property name="icon-name">user-trash-symbolic</property>
-                </object>
-              </child>
-            </object>
-          </child>
-          <child>
-            <object class="GtkScrolledWindow">
-              <property name="hexpand">true</property>
-              <property name="vexpand">true</property>
-              <property name="propagate-natural-width">true</property>
-              <property name="propagate-natural-height">true</property>
-              <property name="overflow">1</property>
-              <style>
-                <class name="undershoot-bottom"/>
-              </style>
-              <child>
-                <object class="AdwBin" id="preview_file_bin">
-                  <style>
-                    <class name="p10"/>
-                  </style>
-                </object>
-              </child>
-            </object>
-          </child>
-        </object>
-      </child>
-    </object>
   </template>
+  <menu id="new_chat_menu">
+    <section>
+      <item>
+        <attribute name="label" translatable="yes">New Chat</attribute>
+        <attribute name="action">app.new_chat</attribute>
+      </item>
+      <item>
+        <attribute name="label" translatable="yes">New Notebook</attribute>
+        <attribute name="action">app.new_notebook</attribute>
+      </item>
+    </section>
+  </menu>
   <menu id="primary_menu">
     <section>
       <item>
@@ -1439,60 +1213,6 @@ Alpaca is distributed under GPL v3.0, this software comes with no warranty.</pro
       </item>
     </section>
   </menu>
-  <menu id="chat_right_click_menu">
-    <section>
-      <item>
-        <attribute name="label" translatable="yes">Rename Chat</attribute>
-        <attribute name="action">app.rename_chat</attribute>
-      </item>
-      <item>
-        <attribute name="label" translatable="yes">Duplicate Chat</attribute>
-        <attribute name="action">app.duplicate_chat</attribute>
-      </item>
-      <item>
-        <attribute name="label" translatable="yes">Export Chat</attribute>
-        <attribute name="action">app.export_chat</attribute>
-      </item>
-    </section>
-    <section>
-      <item>
-        <attribute name="label" translatable="yes">Delete Chat</attribute>
-        <attribute name="action">app.delete_chat</attribute>
-      </item>
-    </section>
-  </menu>
-  <menu id="send_message_menu">
-    <section>
-      <item>
-        <attribute name="label" translatable="yes">Send as User</attribute>
-        <attribute name="action">app.send_message</attribute>
-      </item>
-      <item>
-        <attribute name="label" translatable="yes">Send as System</attribute>
-        <attribute name="action">app.send_system_message</attribute>
-      </item>
-      <item>
-        <attribute name="label" translatable="yes">Use Tools</attribute>
-        <attribute name="action">app.use_tools</attribute>
-      </item>
-    </section>
-  </menu>
-  <menu id="attachment_menu">
-    <section>
-      <item>
-        <attribute name="label" translatable="yes">Attach File</attribute>
-        <attribute name="action">app.attach_file</attribute>
-      </item>
-      <item>
-        <attribute name="label" translatable="yes">Attach Website</attribute>
-        <attribute name="action">app.attach_url</attribute>
-      </item>
-      <item>
-        <attribute name="label" translatable="yes">Attach YouTube Captions</attribute>
-        <attribute name="action">app.attach_youtube</attribute>
-      </item>
-    </section>
-  </menu>
   <object class="GtkFileFilter" id="file_filter_db">
     <mime-types>
       <mime-type>application/vnd.sqlite3</mime-type>
@@ -1504,5 +1224,6 @@ Alpaca is distributed under GPL v3.0, this software comes with no warranty.</pro
     </suffixes>
   </object>
 </interface>
+
 
 
