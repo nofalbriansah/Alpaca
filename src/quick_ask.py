@@ -14,7 +14,7 @@ from datetime import datetime
 
 import threading
 
-@Gtk.Template(resource_path='/com/jeffser/Alpaca/QuickAsk/window.ui')
+@Gtk.Template(resource_path='/com/jeffser/Alpaca/quick_ask.ui')
 class QuickAskWindow(Adw.ApplicationWindow):
 
     __gtype_name__ = 'AlpacaQuickAskWindow'
@@ -25,6 +25,11 @@ class QuickAskWindow(Adw.ApplicationWindow):
 
     # tts
     message_dictated = None
+
+    @Gtk.Template.Callback()
+    def closing_app(self, element):
+        if self.get_application().main_alpaca_window.get_visible() == False:
+            self.get_application().quit()
 
     @Gtk.Template.Callback()
     def save_chat(self, button):

@@ -30,6 +30,7 @@ GtkSource.init()
 from .constants import TRANSLATORS, cache_dir, data_dir, config_dir, source_dir
 from .window import AlpacaWindow
 from .quick_ask import QuickAskWindow
+from .live_chat import LiveChatWindow
 from .sql_manager import Instance as SQL
 
 SQL.initialize()
@@ -85,6 +86,9 @@ class AlpacaService:
     def PresentAsk(self):
         self.app.create_quick_ask().present()
 
+    def PresentLive(self):
+        self.app.create_live_chat().present()
+
     def Open(self, chat_name:str):
         for chat_row in list(self.app.props.active_window.chat_list_box):
             if chat_row.chat_window.get_name() == chat_name:
@@ -138,12 +142,17 @@ class AlpacaApplication(Adw.Application):
     def create_quick_ask(self):
         return QuickAskWindow(application=self)
 
+    def create_live_chat(self):
+        return LiveChatWindow(application=self)
+
     def do_activate(self):
         self.main_alpaca_window = self.props.active_window
         if not self.main_alpaca_window:
             self.main_alpaca_window = AlpacaWindow(application=self)
         if self.args.quick_ask or self.args.ask:
             self.create_quick_ask().present()
+        elif self.args.live_chat:
+            self.create_live_chat().present()
         else:
             self.main_alpaca_window.present()
 
@@ -224,6 +233,7 @@ def main(version):
     parser.add_argument('--list-chats', action='store_true', help='Display all the current chats')
     parser.add_argument('--ask', type=str, metavar='"MESSAGE"', help="Open Quick Ask with message")
     parser.add_argument('--quick-ask', action='store_true', help='Open Quick Ask')
+    parser.add_argument('--live-chat', action='store_true', help='Open Live Chat')
     args = parser.parse_args()
 
     if args.version:

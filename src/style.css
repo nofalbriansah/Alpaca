@@ -26,6 +26,10 @@
 .code_block:focus, .tts_message {
 	box-shadow: 0 0 1px 2px mix(@accent_color, @window_bg_color, 0.5);
 }
+.tts_message_loading {
+  border-radius: 10px;
+	box-shadow: 0 0 1px 2px mix(@window_fg_color, @window_bg_color, 0.5);
+}
 .model_popover {
   margin-top: 6px;
   margin-bottom: 6px;
@@ -78,6 +82,11 @@ stacksidebar {
 .model_flowbox, .model_flowbox .model_box, .p10 {
   padding: 10px;
 }
+
+.p20 {
+  padding: 20px;
+}
+
 .p0 {
   padding: 0px;
 }
@@ -123,8 +132,17 @@ stacksidebar {
   border: solid white 2px;
   transition: transform .2s;
 }
+
 .camera_button:hover {
   transform: scale(1.1);
+}
+
+.lh {
+  line-height: 1.2;
+}
+
+.live_chat_background {
+	filter: blur(100px) brightness(150%);
 }
 
 /*-----------MACOS STUFF-----------*/

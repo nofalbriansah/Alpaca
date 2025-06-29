@@ -46,7 +46,7 @@ from gi.repository import Adw, Gtk, Gdk, GLib, GtkSource, Gio, Spelling
 
 from .sql_manager import generate_uuid, generate_numbered_name, prettify_model_name, Instance as SQL
 from . import widgets as Widgets
-from .constants import SPEACH_RECOGNITION_LANGUAGES, TTS_VOICES, TTS_AUTO_MODES, STT_MODELS, data_dir, source_dir, cache_dir
+from .constants import SPEACH_RECOGNITION_LANGUAGES, TTS_VOICES, STT_MODELS, data_dir, source_dir, cache_dir
 
 
 logger = logging.getLogger(__name__)
@@ -82,7 +82,7 @@ class AlpacaWindow(Adw.ApplicationWindow):
     welcome_previous_button = Gtk.Template.Child()
     welcome_next_button = Gtk.Template.Child()
     toast_overlay = Gtk.Template.Child()
-    chat_stack = Gtk.Template.Child()
+    chat_bin = Gtk.Template.Child()
     chat_list_stack = Gtk.Template.Child()
     global_footer_container = Gtk.Template.Child()
     model_searchbar = Gtk.Template.Child()
@@ -134,8 +134,6 @@ class AlpacaWindow(Adw.ApplicationWindow):
     model_manager_top_view_switcher = Gtk.Template.Child()
     last_selected_instance_row = None
 
-    # tts
-    message_dictated = None
 
     @Gtk.Template.Callback()
     def closing_notice(self, dialog):
@@ -153,16 +151,11 @@ class AlpacaWindow(Adw.ApplicationWindow):
                     button_name = _("Open Tutorial in Web Browser")
                 )
             else:
-                tbv=Adw.ToolbarView()
-                tbv.add_top_bar(Adw.HeaderBar())
-
                 instance = ins(
                     instance_id=generate_uuid(),
                     properties={}
                 )
-                #instance
-                tbv.set_content(Widgets.instances.InstancePreferencesPage(instance))
-                self.main_navigation_view.push(Adw.NavigationPage(title=_('Add Instance'), tag='instance', child=tbv))
+                Widgets.instances.InstancePreferencesGroup(instance).present(self)
 
         options = {}
         for ins_type in Widgets.instances.ready_instances:
@@ -207,7 +200,7 @@ class AlpacaWindow(Adw.ApplicationWindow):
         found_models = [row.model for row in list(self.model_dropdown.get_model()) if row.model.get_name() == model_name]
         if not found_models:
             if profile_picture:
-                SQL.insert_or_update_model_picture(model_name, Widgets.attachments.extract_image(profile_picture, 128))
+                SQL.insert_or_update_model_picture(model_name, Widgets.attachments.extract_image(profile_picture, 480))
 
             data_json = {
                 'model': model_name,
@@ -402,8 +395,8 @@ class AlpacaWindow(Adw.ApplicationWindow):
             selected_chat = self.chat_list_box.get_selected_row()
             self.settings.set_string('default-chat', selected_chat.chat.chat_id)
             self.get_current_instance().stop()
-            if self.message_dictated:
-                self.message_dictated.footer.popup.tts_button.set_active(False)
+            if Widgets.voice.message_dictated:
+                Widgets.voice.message_dictated.popup.tts_button.set_active(False)
             self.get_application().quit()
 
         def switch_to_hide():
@@ -602,57 +595,50 @@ class AlpacaWindow(Adw.ApplicationWindow):
             SQL.insert_or_update_message(m_element_bot)
             threading.Thread(target=self.get_current_instance().use_tools, args=(m_element_bot, current_model, Widgets.tools.get_enabled_tools(self.tool_listbox), True)).start()
 
-    @Gtk.Template.Callback()
-    def chat_changed(self, listbox, future_row):
-        def find_model_index(model_name:str):
-            if len(list(self.model_dropdown.get_model())) == 0:
-                return None
+    def auto_select_model(self):
+        def find_model_index(model_name:str) -> int:
+            if len(list(self.model_dropdown.get_model())) == 0 or not model_name:
+                return -1
             detected_models = [i for i, future_row in enumerate(list(self.model_dropdown.get_model())) if future_row.model.get_name() == model_name]
             if len(detected_models) > 0:
                 return detected_models[0]
+            return -1
 
-        if future_row:
-            current_row = next((t for t in list(self.chat_list_box) if t.chat == self.chat_stack.get_visible_child()), future_row)
-            if future_row.chat.chat_id != current_row.chat.chat_id or future_row.chat.get_visible_child_name() == 'loading':
-                # Empty Search
-                if self.searchentry_messages.get_text() != '':
-                    self.searchentry_messages.set_text('')
-                    self.message_search_changed(self.searchentry_messages, self.chat_stack.get_visible_child())
-                self.message_searchbar.set_search_mode(False)
+        chat = self.chat_bin.get_child()
+        if chat:
+            model_index = -1
+            if len(list(chat.container)) > 0:
+                model_index = find_model_index(list(chat.container)[-1].get_model())
+            if model_index == -1:
+                model_index = find_model_index(self.get_current_instance().get_default_model())
 
-                load_chat_thread = None
-                # Load future_row if not loaded already
-                if len(list(future_row.chat.container)) == 0:
-                    load_chat_thread = threading.Thread(target=future_row.chat.load_messages)
-                    load_chat_thread.start()
+            if model_index and model_index != -1:
+                self.model_dropdown.set_selected(model_index)
 
-                # Unload current_row
-                if not current_row.chat.busy and current_row.chat.get_visible_child_name() == 'content' and len(list(current_row.chat.container)) > 0:
-                    threading.Thread(target=current_row.chat.unload_messages).start()
+    @Gtk.Template.Callback()
+    def chat_changed(self, listbox, row):
+        if row:
+            # Discard Old Chat if Not Busy
+            old_chat = self.chat_bin.get_child()
+            if old_chat and not old_chat.busy:
+                old_chat.unload_messages()
+                old_chat.unrealize()
 
-                # Select transition type and change chat
-                self.chat_stack.set_transition_type(4 if list(self.chat_list_box).index(future_row) > list(self.chat_list_box).index(current_row) else 5)
-                self.chat_stack.set_visible_child(future_row.chat)
+            # Load New Chat
+            new_chat = row.chat
+            if new_chat.get_parent():
+                new_chat.get_parent().set_child(None)
+            if new_chat.busy:
+                self.get_root().global_footer.toggle_action_button(False)
+            else:
+                self.get_root().global_footer.toggle_action_button(True)
+                new_chat.load_messages()
 
-                # Sync stop/send button to chat's state
-                self.global_footer.toggle_action_button(not future_row.chat.busy)
-                if load_chat_thread:
-                    load_chat_thread.join()
-                # Select the correct model for the chat
-                model_to_use_index = None
-                if len(list(future_row.chat.container)) > 0:
-                    model_to_use_index = find_model_index(list(future_row.chat.container)[-1].get_model())
-                else:
-                    model_to_use_index = find_model_index(self.get_current_instance().get_default_model())
+            # Show New Stack Page
+            self.chat_bin.set_child(new_chat)
 
-                if model_to_use_index is None:
-                    model_to_use_index = 0
-
-                self.model_dropdown.set_selected(model_to_use_index)
-
-                # If it has the "new message" indicator, hide it
-                if future_row.indicator.get_visible():
-                    future_row.indicator.set_visible(False)
+            # Select Model
+            self.auto_select_model()
 
     def check_alphanumeric(self, editable, text, length, position, allowed_chars):
         if length == 1:
@@ -680,7 +666,6 @@ class AlpacaWindow(Adw.ApplicationWindow):
                     self.chat_list_box.append(chat.row)
                 else:
                     self.chat_list_box.prepend(chat.row)
-                self.chat_stack.add_child(chat)
                 return chat
 
     def new_chat(self, chat_title:str=_("New Chat"), chat_type:str='chat') -> Widgets.chat.Chat or None:
@@ -756,11 +741,7 @@ class AlpacaWindow(Adw.ApplicationWindow):
         self.tts_voice_combo.set_model(string_list)
         self.settings.bind('tts-model', self.tts_voice_combo, 'selected', Gio.SettingsBindFlags.DEFAULT)
 
-        string_list = Gtk.StringList()
-        for name in TTS_AUTO_MODES:
-            string_list.append(name)
-        self.tts_auto_mode_combo.set_model(string_list)
-        self.settings.bind('tts-auto-mode', self.tts_auto_mode_combo, 'selected', Gio.SettingsBindFlags.DEFAULT)
+        self.settings.bind('tts-auto-dictate', self.tts_auto_mode_combo, 'active', Gio.SettingsBindFlags.DEFAULT)
 
         # Ollama is available but there are no instances added
         if not any(i.get("type") == "ollama:managed" for i in SQL.get_instances()) and shutil.which("ollama"):
@@ -821,6 +802,18 @@ class AlpacaWindow(Adw.ApplicationWindow):
 
         if searchbars.get(current_tag):
             searchbars.get(current_tag).set_search_mode(not searchbars.get(current_tag).get_search_mode())
+
+    def start_live_chat(self):
+        if importlib.util.find_spec('kokoro') and importlib.util.find_spec('sounddevice'):
+            self.get_application().create_live_chat().present()
+        else:
+            options = {_('Cancel'): {'default': True}}
+            Widgets.dialog.Options(
+                heading=_("Can't Run Live Chat"),
+                body=_("You are missing TTS libraries"),
+                close_response=list(options.keys())[0],
+                options=options
+            ).show(self)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -885,7 +878,8 @@ class AlpacaWindow(Adw.ApplicationWindow):
                 button_appearance='destructive'
             )],
             'tool_manager': [lambda *i: GLib.idle_add(self.main_navigation_view.push_by_tag, 'tool_manager') if self.main_navigation_view.get_visible_page().get_tag() != 'tool_manager' else GLib.idle_add(self.main_navigation_view.pop_to_tag, 'chat'), ['<primary>t']],
-            'start_quick_ask': [lambda *_: self.get_application().create_quick_ask().present(), ['<primary><alt>a']]
+            'start_quick_ask': [lambda *_: self.get_application().create_quick_ask().present(), ['<primary><alt>a']],
+            'start_live_chat': [lambda *_: self.start_live_chat(), ['<primary><alt>l']]
         }
         for action_name, data in universal_actions.items():
             self.get_application().create_action(action_name, data[0], data[1] if len(data) > 1 else None)
@@ -915,4 +909,3 @@ class AlpacaWindow(Adw.ApplicationWindow):
                 self.notice_dialog.present(self)
         else:
             self.main_navigation_view.replace_with_tags(['welcome'])
-

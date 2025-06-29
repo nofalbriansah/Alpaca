@@ -320,8 +320,8 @@ class PullingModel(Gtk.Box):
     def update_progressbar(self, data:dict):
         if not self.get_parent():
             logger.info("Pulling of '{}' was canceled".format(self.get_name()))
-            if window.get_current_instance().model_directory:
-                directory = os.path.join(window.get_current_instance().model_directory, 'blobs')
+            if window.get_current_instance().properties.get('model_directory'):
+                directory = os.path.join(window.get_current_instance().properties.get('model_directory'), 'blobs')
                 for digest in self.digests:
                     files_to_delete = glob.glob(os.path.join(directory, digest + '*'))
                     for file in files_to_delete:
@@ -512,7 +512,7 @@ class LocalModelPage(Gtk.Box):
         if not categories:
             categories = available_models.get(self.model.data.get('details', {}).get('parent_model', '').split(':')[0], {}).get('categories', [])
             languages = available_models.get(self.model.data.get('details', {}).get('parent_model', '').split(':')[0], {}).get('languages', [])
-        for category in set(categories + ['language:' + icu.Locale(lan).getDisplayLanguage(icu.Locale(lan)).title() for lan in languages]):
+        for category in set(categories):
             if category not in ('small', 'medium', 'big', 'huge'):
                 categories_box.append(CategoryPill(category, True))
 
@@ -630,7 +630,7 @@ class LocalModel(Gtk.Box):
     def change_profile_picture(self):
         def set_profile_picture(file):
             if file:
-                picture_b64 = attachments.extract_image(file.get_path(), 128)
+                picture_b64 = attachments.extract_image(file.get_path(), 480)
                 SQL.insert_or_update_model_picture(self.get_name(), picture_b64)
                 self.update_profile_picture()
                 threading.Thread(target=window.chat_list_box.get_selected_row().update_profile_pictures()).start()
@@ -707,6 +707,25 @@ class LocalModel(Gtk.Box):
                 button_appearance = 'destructive'
             ))
             buttons.append(remove_button)
+        if len(available_models.get(self.get_name().split(':')[0], {}).get('languages', [])) > 1:
+            languages_container = Gtk.FlowBox(
+                max_children_per_line=3,
+                selection_mode=0
+            )
+            for language in ['language:' + icu.Locale(lan).getDisplayLanguage(icu.Locale(lan)).title() for lan in available_models.get(self.get_name().split(':')[0], {}).get('languages', [])]:
+                languages_container.append(CategoryPill(language, True))
+            languages_scroller = Gtk.ScrolledWindow(
+                child=languages_container,
+                propagate_natural_width=True,
+                propagate_natural_height=True
+            )
+
+            languages_button = Gtk.MenuButton(
+                icon_name='language-symbolic',
+                tooltip_text=_('Languages'),
+                popover=Gtk.Popover(child=languages_scroller)
+            )
+            buttons.append(languages_button)
         if not self.page:
             self.page = LocalModelPage(self)
         return buttons, self.page
@@ -956,6 +975,7 @@ def update_local_model_list():
     window.title_stack.set_visible_child_name('model-selector' if len(get_local_models()) > 0 else 'no-models')
     window.local_model_stack.set_visible_child_name('content' if len(list(window.local_model_flowbox)) > 0 else 'no-models')
     window.model_dropdown.set_enable_search(len(local_models) > 10)
+    GLib.idle_add(window.auto_select_model)
 
 def update_available_model_list():
     global available_models
@@ -1067,3 +1087,4 @@ def get_selected_model():
         return selected_item.model
     else:
         return FallbackModel
+

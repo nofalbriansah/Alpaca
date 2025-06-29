@@ -32,7 +32,8 @@ TRANSLATORS = [
     "Henk Leerssen (Dutch) https://github.com/Henkster72",
     "Nofal Briansah (Indonesian) https://github.com/nofalbriansah",
     "Harimanish (Tamil) https://github.com/harimanish",
-    "Ekaterine Papava (Georgian) https://github.com/EkaterinePapava"
+    "Ekaterine Papava (Georgian) https://github.com/EkaterinePapava",
+    "Jeethan Roche (Kannada) https://github.com/roche-jeethan"
 ]
 
 # Used to populate SR language in preferences
@@ -92,12 +93,6 @@ SPEACH_RECOGNITION_LANGUAGES = (
     'ta',
     'sq'
 )
-
-TTS_AUTO_MODES = {
-    _('Never'): 'never',
-    _('When Alpaca is Focused'): 'focused',
-    _('Always'): 'always'
-}
 
 # Japanese and Chinese require additional library, maybe later
 TTS_VOICES = {

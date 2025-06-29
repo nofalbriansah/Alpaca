@@ -4,11 +4,11 @@ Handles the chat widget
 """
 
 import gi
-from gi.repository import Gtk, Gio, Adw, Gdk, GLib
+from gi.repository import Gtk, Gio, Adw, Gdk
 import logging, os, datetime, random, json, threading
 from ..constants import SAMPLE_PROMPTS, cache_dir
 from ..sql_manager import generate_uuid, prettify_model_name, generate_numbered_name, Instance as SQL
-from . import dialog
+from . import dialog, voice
 from .message import Message
 
 logger = logging.getLogger(__name__)
@@ -135,9 +135,9 @@ class Notebook(Gtk.Stack):
         self.get_root().global_footer.toggle_action_button(True)
 
     def unload_messages(self):
-        self.stop_message()
         for widget in list(self.container):
-            self.container.remove(widget)
+            widget.unparent()
+            widget.unrealize()
         self.set_visible_child_name('loading')
 
     def add_message(self, message):
@@ -166,7 +166,7 @@ class Notebook(Gtk.Stack):
                 )
                 if attachment[1] == 'notebook' and attachment[3]:
                     last_notebook = attachment[3]
-            GLib.idle_add(message_element.block_container.set_content, message[4])
+            message_element.block_container.set_content(message[4])
         self.set_visible_child_name('content' if len(messages) > 0 else 'welcome-screen')
         if last_notebook:
             self.set_notebook(last_notebook)
@@ -229,7 +229,8 @@ class Chat(Gtk.Stack):
     def __init__(self, chat_id:str=None, name:str=_("New Chat")):
         super().__init__(
             name=name,
-            transition_type=1
+            transition_type=1,
+            vexpand=True
         )
         self.container = Gtk.Box(
             orientation=1,
@@ -307,13 +308,14 @@ class Chat(Gtk.Stack):
         self.get_root().global_footer.toggle_action_button(True)
 
     def unload_messages(self):
-        self.stop_message()
         for widget in list(self.container):
-            self.container.remove(widget)
+            widget.unparent()
+            widget.unrealize()
         self.set_visible_child_name('loading')
 
     def add_message(self, message):
         self.container.append(message)
+        self.set_visible_child_name('content')
 
     def load_messages(self):
         messages = SQL.get_messages(self)
@@ -335,7 +337,7 @@ class Chat(Gtk.Stack):
                     attachment_type=attachment[1],
                     content=attachment[3]
                 )
-            GLib.idle_add(message_element.block_container.set_content, message[4])
+            message_element.block_container.set_content(message[4])
         self.set_visible_child_name('content' if len(messages) > 0 else 'welcome-screen')
 
     def send_sample_prompt(self, prompt:str):
@@ -497,16 +499,16 @@ class ChatRow(Gtk.ListBoxRow):
         )
 
     def delete(self):
-        self.chat.stop_message()
         window = self.get_root()
         list_box = self.get_parent()
         list_box.remove(self)
-        self.chat.get_parent().remove(self.chat)
         SQL.delete_chat(self.chat)
         if len(list(list_box)) == 0:
             window.new_chat(chat_type='chat')
         if not list_box.get_selected_row() or list_box.get_selected_row() == self:
             list_box.select_row(list_box.get_row_at_index(0))
+        if voice.message_dictated and voice.message_dictated.chat.chat_id == self.chat.chat_id:
+            voice.message_dictated.popup.tts_button.set_active(False)
 
     def prompt_delete(self):
         dialog.simple(
@@ -528,7 +530,6 @@ class ChatRow(Gtk.ListBoxRow):
             mode=1
         )
         SQL.duplicate_chat(self.chat, new_chat)
-        new_chat.load_messages()
 
     def on_export_successful(self, file, result):
         file.replace_contents_finish(result)

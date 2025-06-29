@@ -6,7 +6,7 @@ import os, shutil, json, re, logging
 from ...sql_manager import generate_uuid, generate_numbered_name, prettify_model_name, Instance as SQL
 from .. import dialog
 from .ollama_instances import Ollama, OllamaManaged
-from .openai_instances import ChatGPT, Gemini, Together, Venice, Deepseek, OpenRouter, Anthropic, Groq, Fireworks, LambdaLabs, Cerebras, Klusterai, LlamaAPI, NovitaAI, GenericOpenAI
+from .openai_instances import ChatGPT, Gemini, Together, Venice, Deepseek, OpenRouter, Anthropic, Groq, Qwen, Fireworks, LambdaLabs, Cerebras, Klusterai, Mistral, LlamaAPI, NovitaAI, GenericOpenAI
 
 logger = logging.getLogger(__name__)
 
@@ -16,8 +16,8 @@ override_urls = {
     'ROCR_VISIBLE_DEVICES': 'https://github.com/ollama/ollama/blob/main/docs/gpu.md#gpu-selection-1'
 }
 
-class InstancePreferencesPage(Adw.PreferencesPage):
-    __gtype_name__ = 'AlpacaInstancePreferencesPage'
+class InstancePreferencesGroup(Adw.Dialog):
+    __gtype_name__ = 'AlpacaInstancePreferencesGroup'
 
     def __init__(self, instance):
         self.instance = instance
@@ -99,6 +99,22 @@ class InstancePreferencesPage(Adw.PreferencesPage):
                 name='think',
                 active=self.instance.properties.get('think')
             ))
+
+        if 'share_name' in self.instance.properties: #SHARE NAME
+            share_name_el = Adw.ComboRow(
+                title=_('Share Name'),
+                subtitle=_('Automatically share your name with the AI models.'),
+                name='share_name'
+            )
+
+            string_list = Gtk.StringList()
+            string_list.append('Do Not Share')
+            string_list.append('Username')
+            string_list.append('Full Name')
+
+            share_name_el.set_model(string_list)
+            share_name_el.set_selected(self.instance.properties.get('share_name'))
+            self.groups[-1].add(share_name_el)
 
         if 'max_tokens' in self.instance.properties: #MAX TOKENS
             self.groups[-1].add(Adw.SpinRow(
@@ -190,7 +206,7 @@ class InstancePreferencesPage(Adw.PreferencesPage):
             model_directory_el.add_suffix(open_dir_button)
             self.groups[-1].add(model_directory_el)
 
-        if 'default_model' in self.instance.properties or 'title_model' in self.instance.properties:
+        if self.instance.row and ('default_model' in self.instance.properties or 'title_model' in self.instance.properties):
             self.groups.append(Adw.PreferencesGroup())
 
             factory = Gtk.SignalListItemFactory()
@@ -228,36 +244,39 @@ class InstancePreferencesPage(Adw.PreferencesPage):
             self.groups[-1].add(default_model_el)
             self.groups[-1].add(title_model_el)
 
-        pg = Adw.PreferencesGroup()
-        button_container = Gtk.Box(
-            spacing=10,
-            halign=3
-        )
+        pp = Adw.PreferencesPage()
+        for group in self.groups:
+            pp.add(group)
 
         cancel_button = Gtk.Button(
             label=_('Cancel'),
             tooltip_text=_('Cancel'),
-            css_classes=['pill']
+            css_classes=['raised']
         )
-        cancel_button.connect('clicked', lambda button: self.get_root().main_navigation_view.pop_to_tag('instance_manager'))
-        button_container.append(cancel_button)
+        cancel_button.connect('clicked', lambda button: self.close())
 
         save_button = Gtk.Button(
             label=_('Save'),
             tooltip_text=_('Save'),
-            css_classes=['pill', 'suggested-action']
+            css_classes=['suggested-action']
         )
         save_button.connect('clicked', lambda button: self.save())
-        button_container.append(save_button)
-        pg.add(button_container)
 
-        super().__init__(
-            title=self.instance.instance_type_display
+        hb = Adw.HeaderBar(
+            show_start_title_buttons=False,
+            show_end_title_buttons=False
         )
-        for group in self.groups:
-            self.add(group)
+        hb.pack_start(cancel_button)
+        hb.pack_end(save_button)
 
-        self.add(pg)
+        tbv=Adw.ToolbarView()
+        tbv.add_top_bar(hb)
+        tbv.set_content(pp)
+        super().__init__(
+            child=tbv,
+            title=_('Edit Instance') if self.instance.row else _('Create Instance'),
+            content_width=500
+        )
 
     def save(self):
         save_functions = {
@@ -266,6 +285,7 @@ class InstancePreferencesPage(Adw.PreferencesPage):
             'url': lambda val: '{}{}'.format('http://' if not re.match(r'^(http|https)://', val) else '', val.rstrip('/')),
             'api': lambda val: self.instance.properties.get('api') if self.instance.properties.get('api') and not val else (val if val else 'empty'),
             'think': lambda val: val,
+            'share_name': lambda val: val,
             'max_tokens': lambda val: val,
             'temperature': lambda val: val,
             'seed': lambda val: val,
@@ -314,7 +334,7 @@ class InstancePreferencesPage(Adw.PreferencesPage):
         else:
             self.get_root().instance_listbox.append(InstanceRow(instance=self.instance))
 
-        self.get_root().main_navigation_view.pop_to_tag('instance_manager')
+        self.force_close()
 
 # Fallback for when there are no instances
 class Empty:
@@ -380,10 +400,7 @@ class InstanceRow(Adw.ActionRow):
             self.add_suffix(edit_button)
 
     def show_edit(self):
-        tbv=Adw.ToolbarView()
-        tbv.add_top_bar(Adw.HeaderBar())
-        tbv.set_content(InstancePreferencesPage(self.instance))
-        self.get_root().main_navigation_view.push(Adw.NavigationPage(title=_('Edit Instance'), tag='instance', child=tbv))
+        InstancePreferencesGroup(self.instance).present(self.get_root())
 
     def remove(self):
         SQL.delete_instance(self.instance.instance_id)
@@ -391,8 +408,7 @@ class InstanceRow(Adw.ActionRow):
 
 def create_instance_row(ins:dict) -> InstanceRow or None:
     instance_dictionary = {i.instance_type: i for i in ready_instances}
-    # instance_id:str, properties:dict):
-    if ins.get('type') in list(instance_dictionary.keys()) and (ins.get('type') != 'ollama:managed' or not shutil.which('ollama')):
+    if ins.get('type') in list(instance_dictionary.keys()) and (ins.get('type') != 'ollama:managed' or shutil.which('ollama')):
         return InstanceRow(
             instance=instance_dictionary.get(ins.get('type'))(
                 instance_id=ins.get('id'),
@@ -424,5 +440,5 @@ def update_instance_list(instance_listbox:Gtk.ListBox, selected_instance_id:str)
 if os.getenv('ALPACA_OLLAMA_ONLY', '0') == '1':
     ready_instances = [OllamaManaged, Ollama]
 else:
-    ready_instances = [OllamaManaged, Ollama, ChatGPT, Gemini, Together, Venice, Deepseek, OpenRouter, Anthropic, Groq, Fireworks, LambdaLabs, Cerebras, Klusterai, LlamaAPI, NovitaAI, GenericOpenAI]
+    ready_instances = [OllamaManaged, Ollama, ChatGPT, Gemini, Together, Venice, Deepseek, OpenRouter, Anthropic, Groq, Qwen, Fireworks, LambdaLabs, Cerebras, Klusterai, Mistral, LlamaAPI, NovitaAI, GenericOpenAI]
 

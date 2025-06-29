@@ -4,97 +4,51 @@ from gi.repository import Adw, Gtk
 
 import datetime, time, random, requests, json, os
 from html2text import html2text
+from duckduckgo_search import DDGS
 
 from .. import terminal, attachments
 from ...constants import data_dir
 from ...sql_manager import generate_uuid, Instance as SQL
 
-class Base(Adw.ActionRow):
-    __gtype_name__ = 'AlpacaToolRow'
+class ToolPreferencesDialog(Adw.Dialog):
+    __gtype_name__ = 'AlpacaToolPreferencesDialog'
 
-    variables = {}
-
-    def __init__(self, variables:dict, enabled:bool):
-        for name, data in self.variables.items():
-            self.variables[name]['value'] = variables.get(name, data.get('value'))
-
-        super().__init__(
-            title = self.name,
-            subtitle = self.description
-        )
-
-        info_button = Gtk.Button(icon_name='info-outline-symbolic', css_classes=['flat'], valign=3)
-        info_button.connect('clicked', lambda *_: self.show_tool_page())
-        self.add_prefix(info_button)
-        self.enable_switch = Gtk.Switch(active=enabled, valign=3)
-        self.enable_switch.connect('state-set', lambda *_: self.enabled_changed())
-        self.add_suffix(self.enable_switch)
-
-    def enabled_changed(self):
-        SQL.insert_or_update_tool_parameters(self.tool_metadata.get('name'), self.extract_variables_for_sql(), self.is_enabled())
-
-    def is_enabled(self) -> bool:
-        return self.enable_switch.get_active()
-
-    def get_tool(self) -> dict:
-        return {
-            "type": "function",
-            "function": self.tool_metadata
-        }
-
-    def extract_variables_for_sql(self) -> dict:
-        variables_for_sql = {}
-        for name, data in self.variables.items():
-            variables_for_sql[name] = data.get('value')
-        return variables_for_sql
-
-    def save_variables(self, variables_group):
-        for v in list(list(list(variables_group)[0])[1])[0]:
-            if v.get_name() in list(self.variables.keys()):
-                if isinstance(v, Adw.EntryRow) or isinstance(v, Adw.PasswordEntryRow):
-                    self.variables[v.get_name()]['value'] = v.get_text()
-                elif isinstance(v, Adw.SpinRow):
-                    self.variables[v.get_name()]['value'] = v.get_value()
-                elif isinstance(v, Adw.SwitchRow):
-                    self.variables[v.get_name()]['value'] = v.get_active()
-
-        SQL.insert_or_update_tool_parameters(self.name, self.extract_variables_for_sql(), self.is_enabled())
-        window.main_navigation_view.pop()
-
-    def show_tool_page(self):
-        tool_page = Adw.PreferencesPage()
+    def __init__(self, tool):
+        self.tool = tool
+        pp = Adw.PreferencesPage()
         ai_description = Adw.PreferencesGroup(
             title=_("AI Description"),
             description=_("The description the AI model will use to understand what the tool does.")
         )
         ai_description.add(
             Adw.Bin(
-                child=Gtk.Label(label=self.tool_metadata.get('description'), wrap=True, halign=1),
-                css_classes=["card", "p10"]
+                child=Gtk.Label(label=self.tool.tool_metadata.get('description'), wrap=True, halign=1),
+                css_classes=["card", "p10", "dim-label"]
             )
         )
-        tool_page.add(ai_description)
-        if len(list(self.tool_metadata.get('parameters'))) > 0:
+        pp.add(ai_description)
+
+        if len(list(self.tool.tool_metadata.get('parameters'))) > 0:
             arguments = Adw.PreferencesGroup(
                 title=_("Arguments"),
                 description=_("Variables that are filled by the AI.")
             )
-            for name, data in self.tool_metadata.get('parameters', {}).get('properties', {}).items():
+            for name, data in self.tool.tool_metadata.get('parameters', {}).get('properties', {}).items():
                 arguments.add(
                     Adw.ActionRow(
                         title=name.replace('_', ' ').title(),
                         subtitle=data.get('description')
                     )
                 )
-            tool_page.add(arguments)
+            pp.add(arguments)
 
-        if len(list(self.variables)) > 0:
+        if len(list(self.tool.variables)) > 0:
             variables = Adw.PreferencesGroup(
                 title=_("Variables"),
                 description=_("User filled values that the tool uses to work, the AI does not have access to these variables at all.")
             )
-            for name, data in self.variables.items():
-                if data.get('type', 'string') == 'string':
+            for name, data in self.tool.variables.items():
+                if data.get('type') == 'string':
                     variables.add(
                         Adw.EntryRow(
                             name=name,
@@ -125,26 +79,107 @@ class Base(Adw.ActionRow):
                             active=bool(data.get('value', False))
                         )
                     )
-            tool_page.add(variables)
+                elif data.get('type') == 'options':
+                    combo = Adw.ComboRow(
+                        name=name,
+                        title=data.get('display_name')
+                    )
+                    string_list = Gtk.StringList()
+                    for option in data.get('options'):
+                        string_list.append(option)
+                    combo.set_model(string_list)
+                    combo.set_selected(data.get('value'))
+                    variables.add(combo)
+            pp.add(variables)
 
-            button_container = Gtk.Box(orientation=0, spacing=10, halign=3)
+            cancel_button = Gtk.Button(
+                label=_('Cancel'),
+                tooltip_text=_('Cancel'),
+                css_classes=['raised']
+            )
+            cancel_button.connect('clicked', lambda button: self.close())
 
-            cancel_button = Gtk.Button(label=_("Cancel"), css_classes=['pill'])
-            cancel_button.connect('clicked', lambda *_: window.main_navigation_view.pop())
-            button_container.append(cancel_button)
+            save_button = Gtk.Button(
+                label=_('Save'),
+                tooltip_text=_('Save'),
+                css_classes=['suggested-action']
+            )
+            save_button.connect('clicked', lambda button: self.save_variables(variables))
 
-            accept_button = Gtk.Button(label=_("Accept"), css_classes=['pill', 'suggested-action'])
-            accept_button.connect('clicked', lambda *_: self.save_variables(variables))
-            button_container.append(accept_button)
+            hb = Adw.HeaderBar(
+                show_start_title_buttons=False,
+                show_end_title_buttons=False
+            )
+            hb.pack_start(cancel_button)
+            hb.pack_end(save_button)
 
-            button_group = Adw.PreferencesGroup()
-            button_group.add(button_container)
-            tool_page.add(button_group)
+        else:
+            hb = Adw.HeaderBar()
 
-        page_widget = Adw.ToolbarView()
-        page_widget.add_top_bar(Adw.HeaderBar())
-        page_widget.set_content(tool_page)
-        window.main_navigation_view.push(Adw.NavigationPage.new(child=page_widget, title=self.name))
+        tbv=Adw.ToolbarView()
+        tbv.add_top_bar(hb)
+        tbv.set_content(pp)
+        super().__init__(
+            child=tbv,
+            title=self.tool.name,
+            content_width=500
+        )
+
+    def save_variables(self, variables_group):
+        for v in list(list(list(variables_group)[0])[1])[0]:
+            if v.get_name() in list(self.tool.variables.keys()):
+                if isinstance(v, Adw.EntryRow) or isinstance(v, Adw.PasswordEntryRow):
+                    self.tool.variables[v.get_name()]['value'] = v.get_text()
+                elif isinstance(v, Adw.SpinRow):
+                    self.tool.variables[v.get_name()]['value'] = v.get_value()
+                elif isinstance(v, Adw.SwitchRow):
+                    self.tool.variables[v.get_name()]['value'] = v.get_active()
+                elif isinstance(v, Adw.ComboRow):
+                    self.tool.variables[v.get_name()]['value'] = v.get_selected()
+
+        SQL.insert_or_update_tool_parameters(self.tool.tool_metadata.get('name'), self.tool.extract_variables_for_sql(), self.tool.is_enabled())
+        self.close()
+
+class Base(Adw.ActionRow):
+    __gtype_name__ = 'AlpacaToolRow'
+
+    variables = {}
+
+    def __init__(self, variables:dict, enabled:bool):
+        for name, data in self.variables.items():
+            self.variables[name]['value'] = variables.get(name, data.get('value'))
+
+        super().__init__(
+            title = self.name,
+            subtitle = self.description
+        )
+
+        info_button = Gtk.Button(icon_name='info-outline-symbolic', css_classes=['flat'], valign=3)
+        info_button.connect('clicked', lambda *_: ToolPreferencesDialog(self).present(self.get_root()))
+        self.add_prefix(info_button)
+        self.enable_switch = Gtk.Switch(active=enabled, valign=3)
+        self.enable_switch.connect('state-set', lambda *_: self.enabled_changed())
+        self.add_suffix(self.enable_switch)
+
+    def enabled_changed(self):
+        SQL.insert_or_update_tool_parameters(self.tool_metadata.get('name'), self.extract_variables_for_sql(), self.is_enabled())
+
+    def is_enabled(self) -> bool:
+        return self.enable_switch.get_active()
+
+    def get_tool(self) -> dict:
+        return {
+            "type": "function",
+            "function": self.tool_metadata
+        }
+
+    def extract_variables_for_sql(self) -> dict:
+        variables_for_sql = {}
+        for name, data in self.variables.items():
+            variables_for_sql[name] = data.get('value')
+        return variables_for_sql
+
+
 
     def attach_online_image(self, bot_message, image_title:str, image_url:str):
         attachment = bot_message.add_attachment(
@@ -368,68 +403,60 @@ class OnlineSearch(Base):
     }
     name = _("Online Search")
     description = _("Search for a term online using DuckDuckGo")
-    variables = {}
+    variables = {
+        'safesearch': {
+            'display_name': _("Safe Search"),
+            'value': 1,
+            'type': 'options',
+            'options': [
+                _('On'),
+                _('Moderate'),
+                _('Off')
+            ]
+        },
+        'max_results': {
+            'display_name': _("Max Results"),
+            'value': 1,
+            'type': 'int',
+            'min': 1,
+            'max': 5
+        }
+    }
 
     def run(self, arguments, messages, bot_message) -> str:
         search_term = arguments.get("search_term")
         if not search_term:
             return "Error: Search term was not provided"
 
-        response = requests.get('https://api.duckduckgo.com/?q={}&format=json'.format(search_term.replace(' ', '+')))
-        data = response.json()
+        result_md = []
 
-        result_md = [
-            "# {}".format(data.get('Heading', 'Abstract'))
-        ]
+        text_results = DDGS().text(
+            keywords=search_term,
+            max_results=self.variables.get('max_results', {}).get('value', 1),
+            safesearch=('on', 'moderate', 'off')[self.variables.get('safesearch', {}).get('value', 1)]
+        )
 
-        if data.get("AbstractURL"):
+        for text_result in text_results:
             attachment = bot_message.add_attachment(
                 file_id = generate_uuid(),
-                name = data.get("AbstractSource", _("Abstract Source")),
+                name = _("Abstract Source"),
                 attachment_type = "link",
-                content = data.get("AbstractURL")
+                content = text_result.get('href')
             )
             SQL.insert_or_update_attachment(bot_message, attachment)
+            result_md.append('### {}'.format(text_result.get('title')))
+            result_md.append(text_result.get('body'))
 
-        if data.get("AbstractText"):
-            result_md.append(data.get("AbstractText"))
+        images = DDGS().images(
+            keywords=search_term,
+            max_results=self.variables.get('max_results', {}).get('value', 1),
+            safesearch=('on', 'moderate', 'off')[self.variables.get('safesearch', {}).get('value', 1)],
+            size='Medium',
+            layout='Square'
+        )
 
-        if data.get("Image"):
-            self.attach_online_image(bot_message, data.get("Heading", "Web Result Image"), "https://duckduckgo.com{}".format(data.get("Image")))
-
-        if data.get("Infobox") and len(data.get("Infobox", {}).get("content")) > 0:
-            info_block = ""
-            for info in data.get("Infobox").get("content"):
-                if info.get("data_type") == "string" and info.get("label") and info.get("value"):
-                    info_block += "- **{}**: {}\n".format(info.get("label"), info.get("value"))
-            if len(info_block) > 0:
-                result_md.append("## General Information")
-                result_md.append(info_block)
-
-        if data.get("OfficialWebsite"):
-            attachment = bot_message.add_attachment(
-                file_id = generate_uuid(),
-                name = _("Official Website"),
-                attachment_type = "link",
-                content = data.get("OfficialWebsite")
-            )
-            SQL.insert_or_update_attachment(bot_message, attachment)
-
-        if len(result_md) == 1 and len(data.get("RelatedTopics", [])) > 0:
-            result_md.append("No direct results were found but there are some related topics.")
-            result_md.append("## Related Topics")
-            result_md.append("### Main Results")
-            for topic in data.get("RelatedTopics"):
-                if topic.get("FirstURL"):
-                    title = topic.get("FirstURL").split("/")[-1].replace("_", " ").title()
-                    result_md.append("#### {}".format(title))
-                    result_md.append(topic.get("Text"))
-                elif topic.get("Name"):
-                    result_md.append("### {}".format(topic.get("Name")))
-                    for topic2 in topic.get("Topics"):
-                        title = topic2.get("FirstURL").split("/")[-1].replace("_", " ").title()
-                        result_md.append("#### {}".format(title))
-                        result_md.append(topic2.get("Text"))
+        for image_result in images:
+            self.attach_online_image(bot_message, text_result.get('title', _('Web Result Image')), image_result.get('image'))
 
         if len(result_md) == 1:
             return "Error: No results found"

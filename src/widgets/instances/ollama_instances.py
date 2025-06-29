@@ -2,7 +2,7 @@
 
 from gi.repository import Adw, Gtk, GLib
 
-import requests, json, logging, os, shutil, subprocess, threading, re
+import requests, json, logging, os, shutil, subprocess, threading, re, signal, pwd, getpass
 from .. import dialog, tools
 from ...ollama_models import OLLAMA_MODELS
 from ...constants import data_dir, cache_dir
@@ -14,7 +14,6 @@ logger = logging.getLogger(__name__)
 class BaseInstance:
     instance_id = None
     description = None
-    limitations = ()
     row = None
     process = None
     local_models = None
@@ -134,7 +133,7 @@ class BaseInstance:
                     response = ''
 
                 messages.append({
-                    'role': 'assistant',
+                    'role': 'tool',
                     'content': response,
                     'tool_calls': [tc]
                 })
@@ -154,7 +153,6 @@ class BaseInstance:
             logger.error(e)
 
         if generate_message:
-            tools.log_to_message(_("Generating message..."), bot_message, True)
             bot_message.update_message({'remove_css': 'dim-label'})
             self.generate_response(bot_message, chat, messages, model, tools_used if len(tools_used) > 0 else None)
         else:
@@ -164,26 +162,40 @@ class BaseInstance:
     def generate_response(self, bot_message, chat, messages:list, model:str, tools_used:list):
         if bot_message.options_button:
             bot_message.options_button.set_active(False)
+        GLib.idle_add(bot_message.update_message, {'clear': True})
 
-        if 'no-system-messages' in self.limitations:
-            for i in range(len(messages)):
-                if messages[i].get('role') == 'system':
-                    messages[i]['role'] = 'user'
+        if self.properties.get('share_name', 0) > 0:
+            user_display_name = None
+            if self.properties.get('share_name') == 1:
+                user_display_name = getpass.getuser().title()
+            elif self.properties.get('share_name') == 2:
+                gecos_temp = pwd.getpwnam(getpass.getuser()).pw_gecos.split(',')
+                if len(gecos_temp) > 0:
+                    user_display_name = pwd.getpwnam(getpass.getuser()).pw_gecos.split(',')[0].title()
 
-        if 'text-only' in self.limitations:
-            for i in range(len(messages)):
-                for c in range(len(messages[i].get('content', []))):
-                    if messages[i].get('content')[c].get('type') != 'text':
-                        del messages[i]['content'][c]
-                    else:
-                        messages[i]['content'] = messages[i].get('content')[c].get('text')
+            if user_display_name:
+                messages.insert(0, {
+                    'role': 'system',
+                    'content': 'The user is called {}'.format(user_display_name)
+                })
+
+        model_info = self.get_model_info(model)
+        if model_info:
+            if model_info.get('system'):
+                messages.insert(0, {
+                    'role': 'system',
+                    'content': model_info.get('system')
+                })
 
         params = {
             "model": model,
             "messages": messages,
             "temperature": self.properties.get('temperature', 0.7),
             "stream": True,
-            "think": self.properties.get('think', False)
+            "think": self.properties.get('think', False),
+            "options": {
+                "num_ctx": 16384
+            }
         }
 
         if self.properties.get('seed', 0) != 0:
@@ -223,6 +235,8 @@ class BaseInstance:
         bot_message.update_message({"done": True})
 
     def generate_chat_title(self, chat, prompt:str):
+        if not chat.row or not chat.row.get_parent():
+            return
         params = {
             "temperature": 0.2,
             "model": self.get_title_model(),
@@ -449,7 +463,8 @@ class OllamaManaged(BaseInstance):
             'ROCR_VISIBLE_DEVICES': '1',
             'HIP_VISIBLE_DEVICES': '1'
         },
-        'think': False
+        'think': False,
+        'share_name': 0
     }
 
     def __init__(self, instance_id:str, properties:dict):
@@ -486,7 +501,7 @@ class OllamaManaged(BaseInstance):
     def stop(self):
         if self.process:
             logger.info("Stopping Alpaca's Ollama instance")
-            self.process.terminate()
+            os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
             self.process.wait()
             self.process = None
             self.log_summary = (_("Integrated Ollama instance is not running"), ['dim-label'])
@@ -495,18 +510,23 @@ class OllamaManaged(BaseInstance):
     def start(self):
         self.stop()
         if shutil.which('ollama'):
-            os.makedirs(os.path.join(cache_dir, 'tmp', 'ollama'), exist_ok=True)
-            params = self.properties.get('overrides').copy()
-            params["OLLAMA_HOST"] = self.properties.get('url')
-            params["TMPDIR"] = os.path.join(cache_dir, 'tmp', 'ollama')
-            params["OLLAMA_MODELS"] = self.properties.get('model_directory')
-            self.process = subprocess.Popen(["ollama", "serve"], env={**os.environ, **params}, stderr=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
-            threading.Thread(target=self.log_output, args=(self.process.stdout,)).start()
-            threading.Thread(target=self.log_output, args=(self.process.stderr,)).start()
-            logger.info("Starting Alpaca's Ollama instance...")
-            logger.debug(params)
-            logger.info("Started Alpaca's Ollama instance")
             try:
+                params = self.properties.get('overrides', {}).copy()
+                params["OLLAMA_HOST"] = self.properties.get('url')
+                params["OLLAMA_MODELS"] = self.properties.get('model_directory')
+                self.process = subprocess.Popen(
+                    ["ollama", "serve"],
+                    env={**os.environ, **params},
+                    stderr=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    text=True,
+                    preexec_fn=os.setsid
+                )
+
+                threading.Thread(target=self.log_output, args=(self.process.stdout,)).start()
+                threading.Thread(target=self.log_output, args=(self.process.stderr,)).start()
+                logger.info("Starting Alpaca's Ollama instance...")
+                logger.info("Started Alpaca's Ollama instance")
                 v_str = subprocess.check_output("ollama -v", shell=True).decode('utf-8')
                 logger.info(v_str.split('\n')[1].strip('Warning: ').strip())
             except Exception as e:
@@ -533,7 +553,8 @@ class Ollama(BaseInstance):
         'seed': 0,
         'default_model': None,
         'title_model': None,
-        'think': False
+        'think': False,
+        'share_name': 0
     }
 
     def __init__(self, instance_id:str, properties:dict):

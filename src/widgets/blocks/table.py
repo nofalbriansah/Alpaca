@@ -5,6 +5,7 @@ Handles the table widget shown in messages
 
 import gi
 from gi.repository import Gtk, GObject, Gio
+from .text import markdown_to_pango
 
 import re
 
@@ -16,21 +17,22 @@ class MarkdownTable:
 
     def __repr__(self):
         table_repr = 'Headers: {}\n'.format(self.headers)
-        table_repr += 'Alignments: {}\n'.format(self.alignments)
+        #table_repr += 'Alignments: {}\n'.format(self.alignments)
         table_repr += 'Rows:\n'
         for row in self.rows:
-            table_repr += ' | '.join(row) + '\n'
-        return table_repr
+            table_repr += ' | '.join(row.raw_values) + '\n'
+        return table_repr.replace('*', '')
 
 class Row(GObject.GObject):
     def __init__(self, _values:list):
         super().__init__()
 
         self.values = []
+        self.raw_values = []
 
         for value in _values:
-            value = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', value)
-            self.values.append(value)
+            self.values.append(markdown_to_pango(value))
+            self.raw_values.append(value)
 
     def get_column_value(self, index):
         return self.values[index]
@@ -59,6 +61,9 @@ class Table(Gtk.Frame):
         self.set_child(scrolled_window)
         if content:
             self.set_content(content)
+
+    def get_content_for_dictation(self) -> str:
+        return str(self.table)
 
     def parse_markdown_table(self, markdown_text:str):
         # Define regex patterns for matching the table components

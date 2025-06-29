@@ -6,7 +6,6 @@ Handles the message widget
 import gi
 from gi.repository import Gtk, Gio, Adw, GLib, Gdk, GdkPixbuf, GtkSource, Spelling
 import os, datetime, threading, sys, base64, logging, re, tempfile
-from ..constants import TTS_VOICES, TTS_AUTO_MODES
 from ..sql_manager import prettify_model_name, generate_uuid, Instance as SQL
 from . import model_manager, attachments, blocks, dialog, voice
 
@@ -55,18 +54,23 @@ class OptionPopup(Gtk.Popover):
         self.edit_button.connect('clicked', lambda *_: self.edit_message())
 
         container.append(self.edit_button)
+        self.regenerate_button = Gtk.Button(
+            halign=1,
+            hexpand=True,
+            icon_name="update-symbolic",
+            css_classes=["flat"],
+            tooltip_text=_("Regenerate Message")
+        )
         if self.message_element.get_model():
-            self.regenerate_button = Gtk.Button(
-                halign=1,
-                hexpand=True,
-                icon_name="update-symbolic",
-                css_classes=["flat"],
-                tooltip_text=_("Regenerate Message")
-            )
             self.regenerate_button.connect('clicked', lambda *_: self.regenerate_message())
             container.append(self.regenerate_button)
         self.tts_button = voice.DictateToggleButton(self.message_element)
         container.append(self.tts_button)
+
+    def change_status(self, status:bool):
+        self.delete_button.set_sensitive(status)
+        self.edit_button.set_sensitive(status)
+        self.regenerate_button.set_sensitive(status)
 
     def delete_message(self):
         logger.debug("Deleting message")
@@ -95,17 +99,17 @@ class OptionPopup(Gtk.Popover):
     def regenerate_message(self):
         chat = self.message_element.chat
         model = model_manager.get_selected_model().get_name()
-        for att in list(self.image_attachment_container.container):
+        for att in list(self.message_element.image_attachment_container.container):
             SQL.delete_attachment(att)
             att.get_parent().remove(att)
-        for att in list(self.attachment_container.container):
+        for att in list(self.message_element.attachment_container.container):
             SQL.delete_attachment(att)
             att.get_parent().remove(att)
         if not chat.busy and model:
             self.message_element.block_container.clear()
             self.message_element.author = model
             self.message_element.update_profile_picture()
-            self.message_element.options_button.set_sensitive(False)
+            self.message_element.popup.change_status(False)
             threading.Thread(target=self.message_element.get_root().get_current_instance().generate_message, args=(self.message_element, model)).start()
         else:
             dialog.show_toast(_("Message cannot be regenerated while receiving a response"), self.get_root())
@@ -214,13 +218,15 @@ class BlockContainer(Gtk.Box):
         if not self.generating_block:
             self.generating_block = blocks.GeneratingText()
             GLib.idle_add(self.append, self.generating_block)
-            GLib.idle_add(self.message.options_button.set_sensitive, False)
+            GLib.idle_add(self.message.popup.change_status, False)
         return self.generating_block
 
     def clear(self) -> None:
         self.message.main_stack.set_visible_child_name('loading')
         for child in list(self):
             self.remove(child)
+            child.unmap()
+            child.unrealize()
         self.generating_block = None
 
     def set_content(self, content:str) -> None:
@@ -270,7 +276,7 @@ class BlockContainer(Gtk.Box):
             else:
                 if isinstance(list(self)[-2], blocks.Text) and isinstance(block, blocks.Text):
                     if not list(self)[-2].get_content().endswith('\n') and not block.get_content().startswith('\n'):
-                        list(self)[-2].append_content('\n\n{}'.format(block.get_content()))
+                        list(self)[-2].append_content('\n{}'.format(block.get_content()))
                     else:
                         list(self)[-2].append_content(block.get_content())
                 elif isinstance(list(self)[-2], blocks.Text) and not isinstance(block, blocks.Text):
@@ -278,6 +284,9 @@ class BlockContainer(Gtk.Box):
                     self.insert_child_after(block, list(self)[-2])
                 else:
                     self.insert_child_after(block, list(self)[-2])
+
+        if not self.message.popup.tts_button.get_active() and (self.message.get_root().settings.get_value('tts-auto-dictate').unpack() or self.message.get_root().get_name() == 'AlpacaLiveChat'):
+            self.message.popup.tts_button.set_active(True)
 
     def get_content(self) -> list:
         return [block.get_content() for block in list(self)]
@@ -345,8 +354,17 @@ class Message(Gtk.Box):
         self.main_stack.add_named(blocks.EditingText(self), 'editing')
         self.update_profile_picture()
 
+    def get_root(self) -> Gtk.Widget | None:
+        root = super().get_root()
+        if not root:
+            root = self.chat.row.get_root()
+        return root
+
     def get_content(self) -> str:
         return '\n\n'.join(self.block_container.get_content())
+
+    def get_content_for_dictation(self) -> str:
+        return '\n\n'.join([c.get_content_for_dictation() for c in list(self.block_container) if c is not None])
 
     def get_model(self) -> str or None:
         """
@@ -356,7 +374,10 @@ class Message(Gtk.Box):
             return self.author
 
     def update_header(self, pfp_b64:str = None) -> None:
-        self.popup = OptionPopup(self)
+        if self.popup:
+            self.popup.get_parent().set_popover()
+        else:
+            self.popup = OptionPopup(self)
         self.header_container.set_child(
             MessageHeader(
                 message=self,
@@ -407,12 +428,12 @@ class Message(Gtk.Box):
 
     def update_message(self, data:dict):
         if data.get('done'):
-            self.options_button.set_sensitive(True)
+            self.popup.change_status(True)
             if self.get_root().get_name() == 'AlpacaWindow':
                 GLib.idle_add(self.chat.row.spinner.set_visible, False)
                 if self.get_root().chat_list_box.get_selected_row().get_name() != self.chat.get_name():
                     GLib.idle_add(self.chat.row.indicator.set_visible, True)
-            else:
+            elif self.get_root().get_name() == 'AlpacaQuickAsk':
                 GLib.idle_add(self.get_root().save_button.set_sensitive, True)
 
             self.chat.stop_message()
@@ -423,10 +444,6 @@ class Message(Gtk.Box):
             self.block_container.generating_block = None
             self.dt = datetime.datetime.now()
             GLib.idle_add(self.save)
-            #content = self.get_content()
-            #GLib.idle_add(self.block_container.clear)
-            #GLib.idle_add(self.block_container.set_content, content)
-
             self.update_profile_picture()
             if result_text:
                 dialog.show_notification(
@@ -436,16 +453,12 @@ class Message(Gtk.Box):
                     icon=Gio.ThemedIcon.new('chat-message-new-symbolic')
                 )
 
-            tts_auto_mode = TTS_AUTO_MODES.get(list(TTS_AUTO_MODES.keys())[self.get_root().settings.get_value('tts-auto-mode').unpack()])
-            if tts_auto_mode == 'always' or (tts_auto_mode == 'focused' and self.get_root().is_active()):
-                self.popup.tts_button.set_active(True)
-
-            sys.exit()
+            sys.exit() #Exit thread
 
         elif data.get('content', False):
             GLib.idle_add(self.main_stack.set_visible_child_name, 'content')
             vadjustment = self.chat.scrolledwindow.get_vadjustment()
-            if vadjustment.get_value() + 50 >= vadjustment.get_upper() - vadjustment.get_page_size():
+            if vadjustment.get_value() + 150 >= vadjustment.get_upper() - vadjustment.get_page_size():
                 GLib.idle_add(vadjustment.set_value, vadjustment.get_upper() - vadjustment.get_page_size())
             GLib.idle_add(self.block_container.get_generating_block().append_content, data.get('content', ''))
         elif data.get('clear', False):
@@ -630,13 +643,15 @@ class GlobalFooter(Gtk.Box):
 
         controls_container = Gtk.Box(spacing=12)
         self.append(controls_container)
-        controls_container.append(attachments.GlobalAttachmentButton())
 
-        message_text_view_container = Gtk.Box(
+        self.attachment_button = attachments.GlobalAttachmentButton()
+        controls_container.append(self.attachment_button)
+
+        self.message_text_view_container = Gtk.Box(
             overflow=1,
             css_classes=['card']
         )
-        controls_container.append(message_text_view_container)
+        controls_container.append(self.message_text_view_container)
         self.message_text_view = GlobalMessageTextView()
         message_text_view_scroller = Gtk.ScrolledWindow(
             max_content_height=150,
@@ -645,10 +660,10 @@ class GlobalFooter(Gtk.Box):
             css_classes=['undershoot-bottom'],
             child=self.message_text_view
         )
-        message_text_view_container.append(message_text_view_scroller)
+        self.message_text_view_container.append(message_text_view_scroller)
 
         self.microphone_button = voice.MicrophoneButton(self.message_text_view)
-        message_text_view_container.append(self.microphone_button)
+        self.message_text_view_container.append(self.microphone_button)
 
         self.action_stack = GlobalActionStack()
         controls_container.append(self.action_stack)
