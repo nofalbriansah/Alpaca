@@ -13,8 +13,7 @@ logger = logging.getLogger(__name__)
 override_urls = {
     'HSA_OVERRIDE_GFX_VERSION': 'https://github.com/ollama/ollama/blob/main/docs/gpu.md#overrides',
     'CUDA_VISIBLE_DEVICES': 'https://github.com/ollama/ollama/blob/main/docs/gpu.md#gpu-selection',
-    'ROCR_VISIBLE_DEVICES': 'https://github.com/ollama/ollama/blob/main/docs/gpu.md#gpu-selection-1',
-    'OLLAMA_ORIGINS': 'https://github.com/ollama/ollama/blob/main/docs/faq.md#how-can-i-allow-additional-web-origins-to-access-ollama'
+    'ROCR_VISIBLE_DEVICES': 'https://github.com/ollama/ollama/blob/main/docs/gpu.md#gpu-selection-1'
 }
 
 class InstancePreferencesGroup(Adw.Dialog):
@@ -101,6 +100,14 @@ class InstancePreferencesGroup(Adw.Dialog):
                 active=self.instance.properties.get('think')
             ))
 
+        if 'expose' in self.instance.properties: #EXPOSE
+            self.groups[-1].add(Adw.SwitchRow(
+                title=_('Expose Ollama to Network'),
+                subtitle=_('Make Ollama available for other devices and software in local network'),
+                name='expose',
+                active=self.instance.properties.get('expose')
+            ))
+
         if 'share_name' in self.instance.properties: #SHARE NAME
             share_name_el = Adw.ComboRow(
                 title=_('Share Name'),
@@ -141,37 +148,74 @@ class InstancePreferencesGroup(Adw.Dialog):
                 )
             ))
 
-        if 'temperature' in self.instance.properties: #TEMPERATURE
-            self.groups[-1].add(Adw.SpinRow(
-                title=_('Temperature'),
-                subtitle=_('Increasing the temperature will make the models answer more creatively.'),
-                name='temperature',
-                digits=2,
-                numeric=True,
-                snap_to_ticks=True,
-                adjustment=Gtk.Adjustment(
-                    value=self.instance.properties.get('temperature'),
-                    lower=0.01,
-                    upper=2,
-                    step_increment=0.01
-                )
+        if any([p in ('temperature', 'seed', 'num_ctx') for p in list(self.instance.properties)]):
+            op_switch = Gtk.Switch(
+                valign=3,
+                active=self.instance.properties.get('override_parameters'),
+                name='override_parameters'
+            )
+            self.groups.append(Adw.PreferencesGroup(
+                title=_('Parameters'),
+                description=_('Override the model and instance default parameters.')
             ))
+            self.groups[-1].set_header_suffix(op_switch)
 
-        if 'seed' in self.instance.properties: #SEED
-            self.groups[-1].add(Adw.SpinRow(
-                title=_('Seed'),
-                subtitle=_('Setting this to a specific number other than 0 will make the model generate the same text for the same prompt.'),
-                name='seed',
-                digits=0,
-                numeric=True,
-                snap_to_ticks=True,
-                adjustment=Gtk.Adjustment(
-                    value=self.instance.properties.get('seed'),
-                    lower=0,
-                    upper=99999999,
-                    step_increment=1
+            if 'temperature' in self.instance.properties: #TEMPERATURE
+                temperature_spin = Adw.SpinRow(
+                    title=_('Temperature'),
+                    subtitle=_('Increasing the temperature will make the models answer more creatively.'),
+                    name='temperature',
+                    digits=2,
+                    numeric=True,
+                    snap_to_ticks=True,
+                    sensitive=self.instance.properties.get('override_parameters'),
+                    adjustment=Gtk.Adjustment(
+                        value=self.instance.properties.get('temperature'),
+                        lower=0.01,
+                        upper=2,
+                        step_increment=0.01
+                    )
                 )
-            ))
+                self.groups[-1].add(temperature_spin)
+                op_switch.connect('notify::active', lambda *_, el=temperature_spin: el.set_sensitive(op_switch.get_active()))
+
+            if 'seed' in self.instance.properties: #SEED
+                seed_spin = Adw.SpinRow(
+                    title=_('Seed'),
+                    subtitle=_('Setting this to a specific number other than 0 will make the model generate the same text for the same prompt.'),
+                    name='seed',
+                    digits=0,
+                    numeric=True,
+                    snap_to_ticks=True,
+                    sensitive=self.instance.properties.get('override_parameters'),
+                    adjustment=Gtk.Adjustment(
+                        value=self.instance.properties.get('seed'),
+                        lower=0,
+                        upper=99999999,
+                        step_increment=1
+                    )
+                )
+                self.groups[-1].add(seed_spin)
+                op_switch.connect('notify::active', lambda *_, el=seed_spin: el.set_sensitive(op_switch.get_active()))
+
+            if 'num_ctx' in self.instance.properties:
+                num_ctx_spin = Adw.SpinRow(
+                    title=_('Context Window Size'),
+                    subtitle=_('Controls how many tokens (pieces of text) the model can process and remember at once.'),
+                    name='num_ctx',
+                    digits=0,
+                    numeric=True,
+                    snap_to_ticks=True,
+                    sensitive=self.instance.properties.get('override_parameters'),
+                    adjustment=Gtk.Adjustment(
+                        value=self.instance.properties.get('num_ctx'),
+                        lower=512,
+                        upper=131072,
+                        step_increment=512
+                    )
+                )
+                self.groups[-1].add(num_ctx_spin)
+                op_switch.connect('notify::active', lambda *_, el=num_ctx_spin: el.set_sensitive(op_switch.get_active()))
 
         if 'overrides' in self.instance.properties: #OVERRIDES
             self.groups.append(Adw.PreferencesGroup(
@@ -247,7 +291,7 @@ class InstancePreferencesGroup(Adw.Dialog):
                 if model.get('name') == self.instance.properties.get('default_model'):
                     default_model_index = i
                 if model.get('name') == self.instance.properties.get('title_model'):
-                    title_model_index = i
+                    title_model_index = i + 1
 
             default_model_el.set_model(string_list_default)
             default_model_el.set_selected(default_model_index)
@@ -272,7 +316,7 @@ class InstancePreferencesGroup(Adw.Dialog):
             tooltip_text=_('Save'),
             css_classes=['suggested-action']
         )
-        save_button.connect('clicked', lambda button: self.save())
+        save_button.connect('clicked', lambda button: self.save(self.instance.get_local_models()))
 
         hb = Adw.HeaderBar(
             show_start_title_buttons=False,
@@ -290,32 +334,29 @@ class InstancePreferencesGroup(Adw.Dialog):
             content_width=500
         )
 
-    def save(self):
+    def save(self, local_model_list:list):
         save_functions = {
             'name': lambda val: val if val else _('Instance'),
-            'port': lambda val: 'http://0.0.0.0:{}'.format(int(val)),
             'url': lambda val: '{}{}'.format('http://' if not re.match(r'^(http|https)://', val) else '', val.rstrip('/')),
             'api': lambda val: self.instance.properties.get('api') if self.instance.properties.get('api') and not val else (val if val else 'empty'),
-            'think': lambda val: val,
-            'share_name': lambda val: val,
-            'show_response_metadata': lambda val: val,
-            'max_tokens': lambda val: val,
-            'temperature': lambda val: val,
-            'seed': lambda val: val,
             'override': lambda val: val.strip(),
             'model_directory': lambda val: val.strip(),
-            'default_model': lambda val: self.instance.get_local_models()[val].get('name') if val >= 0 else None,
-            'title_model': lambda val: self.instance.get_local_models()[val].get('name') if val >= 1 else None
+            'default_model': lambda val: local_model_list[val].get('name') if val >= 0 and val < len(local_model_list) else None,
+            'title_model': lambda val: local_model_list[val-1].get('name') if val >= 1 and val < len(local_model_list) else None,
         }
-
+        port = None
+        extra_elements = []
         for group in self.groups:
-            for el in list(list(list(list(group)[0])[1])[0]):
+            if group.get_header_suffix():
+                extra_elements.append(group.get_header_suffix())
+
+            for el in list(list(list(list(group)[0])[1])[0]) + extra_elements:
                 value = None
                 if isinstance(el, Adw.EntryRow) or isinstance(el, Adw.PasswordEntryRow):
                     value = el.get_text().replace('\n', '')
                 elif isinstance(el, Adw.SpinRow):
                     value = el.get_value()
-                elif isinstance(el, Adw.SwitchRow):
+                elif isinstance(el, Adw.SwitchRow) or isinstance(el, Gtk.Switch):
                     value = el.get_active()
                 elif isinstance(el, Adw.ComboRow):
                     if len(list(el.get_model())) <= 0:
@@ -329,8 +370,17 @@ class InstancePreferencesGroup(Adw.Dialog):
                     if 'overrides' not in self.instance.properties:
                         self.instance.properties['overrides'] = {}
                     self.instance.properties['overrides'][el.get_name().split(':')[1]] = value
+                elif el.get_name() == 'port':
+                    port = int(value)
                 elif save_functions.get(el.get_name()):
                     self.instance.properties[el.get_name()] = save_functions.get(el.get_name())(value)
+                else:
+                    self.instance.properties[el.get_name()] = value
+                    if el.get_name() == 'expose':
+                        if value:
+                            self.instance.properties['url'] = 'http://0.0.0.0:{}'.format(port)
+                        else:
+                            self.instance.properties['url'] = 'http://127.0.0.1:{}'.format(port)
 
         if not self.instance.instance_id:
             self.instance.instance_id = generate_uuid()

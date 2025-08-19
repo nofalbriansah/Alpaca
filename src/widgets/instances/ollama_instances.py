@@ -213,16 +213,17 @@ class BaseInstance:
         params = {
             "model": model,
             "messages": messages,
-            "temperature": self.properties.get('temperature', 0.7),
             "stream": True,
-            "think": self.properties.get('think', False) and 'thinking' in model_info.get('capabilities', []),
-            "options": {
-                "num_ctx": 16384
-            }
+            "think": self.properties.get('think', False) and 'thinking' in model_info.get('capabilities', [])
         }
 
-        if self.properties.get('seed', 0) != 0:
-            params["seed"] = self.properties.get('seed')
+        if self.properties.get("override_parameters"):
+            params["options"] = {}
+            params["options"]["temperature"] = self.properties.get('temperature', 0.7)
+            params["options"]["num_ctx"] = self.properties.get('num_ctx', 16384)
+            if self.properties.get('seed', 0) != 0:
+                params["options"]["seed"] = self.properties.get('seed')
+
         data = {'done': True}
         if chat.busy:
             try:
@@ -265,11 +266,22 @@ class BaseInstance:
             return
         model = self.get_title_model()
         params = {
-            "temperature": 0.2,
-            "model": model if model else fallback_model,
+            "options": {
+                "temperature": 0.2
+            },
+            "model": model or fallback_model,
             "max_tokens": MAX_TOKENS_TITLE_GENERATION,
             "stream": False,
-            "prompt": TITLE_GENERATION_PROMPT_OLLAMA.format(prompt),
+            "messages": [
+                {
+                    "role": "system",
+                    "content": TITLE_GENERATION_PROMPT_OLLAMA
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
             "format": {
                 "type": "object",
                 "properties": {
@@ -286,9 +298,11 @@ class BaseInstance:
             },
             'think': False
         }
+        if self.properties.get("override_parameters"):
+            params["options"]["num_ctx"] = self.properties.get('num_ctx', 16384)
         try:
             response = requests.post(
-                '{}/api/generate'.format(self.properties.get('url')),
+                '{}/api/chat'.format(self.properties.get('url')),
                 headers={
                     "Authorization": "Bearer {}".format(self.properties.get('api')),
                     "Content-Type": "application/json"
@@ -483,8 +497,10 @@ class OllamaManaged(BaseInstance):
     default_properties = {
         'name': _('Instance'),
         'url': 'http://0.0.0.0:11434',
+        'override_parameters': True,
         'temperature': 0.7,
         'seed': 0,
+        'num_ctx': 16384,
         'model_directory': os.path.join(data_dir, '.ollama', 'models'),
         'default_model': None,
         'title_model': None,
@@ -492,12 +508,12 @@ class OllamaManaged(BaseInstance):
             'HSA_OVERRIDE_GFX_VERSION': '',
             'CUDA_VISIBLE_DEVICES': '0',
             'ROCR_VISIBLE_DEVICES': '1',
-            'HIP_VISIBLE_DEVICES': '1',
-            'OLLAMA_ORIGINS': '127.0.0.1'
+            'HIP_VISIBLE_DEVICES': '1'
         },
         'think': False,
+        'expose': False,
         'share_name': 0,
-        'show_response_metadata': False,
+        'show_response_metadata': False
     }
 
     def __init__(self, instance_id:str, properties:dict):
@@ -543,15 +559,19 @@ class OllamaManaged(BaseInstance):
             logger.info("Stopped Alpaca's Ollama instance")
 
     def start(self):
-        self.stop()
-        if shutil.which('ollama'):
+        if shutil.which('ollama') and not self.process:
             try:
                 params = self.properties.get('overrides', {}).copy()
                 params["OLLAMA_HOST"] = self.properties.get('url')
                 params["OLLAMA_MODELS"] = self.properties.get('model_directory')
+                if self.properties.get("expose"):
+                    params["OLLAMA_ORIGINS"] = "chrome-extension://*,moz-extension://*,safari-web-extension://*,http://0.0.0.0,http://127.0.0.1"
+                else:
+                    params["OLLAMA_ORIGINS"] = params.get("OLLAMA_HOST")
                 for key in list(params):
                     if not params.get(key):
                         del params[key]
+                print(params)
                 self.process = subprocess.Popen(
                     ["ollama", "serve"],
                     env={**os.environ, **params},
@@ -588,8 +608,10 @@ class Ollama(BaseInstance):
         'name': _('Instance'),
         'url': 'http://0.0.0.0:11434',
         'api': '',
+        'override_parameters': True,
         'temperature': 0.7,
         'seed': 0,
+        'num_ctx': 16384,
         'default_model': None,
         'title_model': None,
         'think': False,
